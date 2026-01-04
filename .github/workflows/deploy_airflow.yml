@@ -5,8 +5,8 @@ on:
     inputs:
       steps:
         description: 'Select which steps to run'
-        required: false
-        default: 'test,deploy'
+        required: true
+        default: 'all'
         type: choice
         options:
           - 'test'
@@ -25,7 +25,7 @@ jobs:
   test:
     name: 🧪 Build & Test
     runs-on: ubuntu-latest
-    if: github.event.inputs.steps == 'test' || github.event.inputs.steps == 'all' || github.event_name == 'push'
+    if: github.event_name == 'push' || github.event.inputs.steps == 'test' || github.event.inputs.steps == 'all'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,51 +48,55 @@ jobs:
           echo "SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}" >> .env
 
       - name: Build and Start Containers
-        run: docker compose up -d --build
+        run: |
+          echo "🔨 Building Docker containers..."
+          docker compose up -d --build --quiet-pull 2>&1 | grep -v "Pulling\|Download\|Extracting\|Waiting" || true
+          echo "✅ Containers started"
 
       - name: Wait for Healthchecks
         id: healthcheck
         run: |
-          echo "Waiting for services to initialize..."
+          echo "⏳ Waiting for services to initialize..."
           sleep 60 
           
-          # Loop to check health status for 60 more seconds
           for i in {1..6}; do
-            UNHEALTHY=$(docker compose ps --services | xargs -I {} docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q {}) | grep -v "healthy" || true)
+            UNHEALTHY=$(docker compose ps --services | xargs -I {} docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q {}) 2>/dev/null | grep -v "healthy" || true)
             
             if [ -z "$UNHEALTHY" ]; then
               echo "✅ All services are healthy!"
               exit 0
             fi
-            echo "⏳ Services not healthy yet... waiting 10s"
+            echo "⏳ Services not healthy yet... waiting 10s (attempt $i/6)"
             sleep 10
           done
           
           echo "❌ Timed out waiting for services to be healthy."
           docker compose ps
-          docker compose logs
+          docker compose logs --tail=50
           exit 1
 
       - name: Stop Containers
         if: always()
-        run: docker compose down -v
+        run: docker compose down -v --remove-orphans
 
   deploy:
     name: 🚀 Deploy to Raspberry Pi
     runs-on: ubuntu-latest
-    if: github.event.inputs.steps == 'deploy' || github.event.inputs.steps == 'all' || github.event_name == 'push'
+    needs: ${{ github.event_name == 'push' && 'test' || '' }}
+    if: github.event_name == 'push' || github.event.inputs.steps == 'deploy' || github.event.inputs.steps == 'all'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Install Cloudflared & SSH Tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-          curl -L https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-archive-keyring.gpg >/dev/null
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-archive-keyring.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
-          sudo apt-get update
-          sudo apt-get install cloudflared
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass > /dev/null 2>&1
+          curl -sL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-archive-keyring.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-archive-keyring.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloudflared > /dev/null 2>&1
+          echo "✅ Tools installed"
 
       - name: Configure SSH
         run: |
@@ -108,7 +112,7 @@ jobs:
 
       - name: Prepare Deployment Files
         run: |
-          # 1. Create the .env file locally on the runner
+          # Create the .env file
           echo "AIRFLOW_UID=50000" > .env
           echo "_AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}" >> .env
           echo "_AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}" >> .env
@@ -120,10 +124,11 @@ jobs:
           echo "SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}" >> .env
           echo "SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}" >> .env
 
-          # 2. Create a clean shell script to run on the Pi
-          cat <<EOF > deploy_script.sh
+          # Create deployment script
+          cat <<'EOF' > deploy_script.sh
           #!/bin/bash
           set -e
+          
           echo "📂 Navigating to project..."
           cd ${{ secrets.AIRFLOW_PATH }}
 
@@ -135,22 +140,26 @@ jobs:
           mv /tmp/.env .
 
           echo "🐳 Docker Compose Up..."
-          docker compose down --remove-orphans
-          docker compose up -d --build
+          docker compose down --remove-orphans 2>&1 | grep -v "Container\|Network\|Volume" || true
+          
+          # Suppress build output, only show errors
+          docker compose up -d --build 2>&1 | \
+            grep -vE "Pulling|Download|Extracting|Waiting|Pull complete|Already exists|sha256" | \
+            grep -E "ERROR|WARNING|Building|Built|Created|Started|^$" || true
 
           echo "🧹 Cleaning up..."
-          docker image prune -f
+          docker image prune -f > /dev/null 2>&1
           rm -f /tmp/deploy_script.sh
+          
+          echo "✅ Deployment Successfully Completed!"
           EOF
 
       - name: Transfer and Execute
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
         run: |
-          # 3. Copy .env and script to the Pi's /tmp directory
           echo "📤 Uploading files to Raspberry Pi..."
           sshpass -p "$SSH_PASS" scp .env deploy_script.sh ssh.mj-dev.net:/tmp/
 
-          # 4. Execute the script
           echo "🚀 Executing deployment..."
           sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "bash /tmp/deploy_script.sh"
