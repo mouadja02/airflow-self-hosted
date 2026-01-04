@@ -180,19 +180,25 @@ jobs:
           cd ${{ secrets.AIRFLOW_PATH }}
           git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
 
+          echo "⬇️ Fetching latest changes first..."
+          git fetch origin main
+
           echo "⬆️ Checking for RPi changes..."
           git add .
 
           if [ -n "\$(git status --porcelain)" ]; then
-            echo "📝 Changes detected. Committing and pushing..."
-            git commit -m "[from RPi] Updated dataset_updater DAG"
+            echo "📝 Local changes detected. Stashing and pulling..."
+            git stash
+            git pull origin main
+            echo "📝 Re-applying local changes and committing..."
+            git stash pop || true
+            git add .
+            git commit -m "[from RPi] Updated dataset_updater DAG" || true
             git push origin main
           else
-            echo "✨ No changes to commit from Raspberry Pi."
+            echo "✨ No local changes to commit."
+            git pull origin main
           fi
-
-          echo "⬇️ Pulling latest changes..."
-          git pull origin main
 
           echo "🔒 Resetting permissions for Airflow..."
           echo '$SSH_PASS' | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
@@ -206,7 +212,7 @@ jobs:
 
           echo "🚀 Executing sync..."
           sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "bash /tmp/sync_changes.sh"
-
+          
   deploy-full:
     name: 🚀 Full Rebuild & Deploy
     runs-on: ubuntu-latest
