@@ -795,6 +795,7 @@ def cleanup_stage(**context):
     return result
 
 
+
 # Create file format tasks for all DAGs
 for i in range(1, 5):
     create_format = SnowflakeOperator(
