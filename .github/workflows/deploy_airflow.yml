@@ -6,6 +6,7 @@ on:
     branches:
       - main
     paths:
+      - '.github/workflows/deploy_airflow.yml'
       - 'docker-compose.yml'
       - 'Dockerfile'
       - 'docker/data/airflow/dags/**'
@@ -37,7 +38,7 @@ jobs:
           echo "SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}" >> .env
 
       - name: Build and Start Containers
-        run: docker-compose up -d --build
+        run: docker compose up -d --build
 
       - name: Wait for Healthchecks
         id: healthcheck
@@ -47,7 +48,7 @@ jobs:
           
           # Loop to check health status for 60 more seconds
           for i in {1..6}; do
-            UNHEALTHY=$(docker-compose ps --services | xargs -I {} docker inspect --format '{{.State.Health.Status}}' $(docker-compose ps -q {}) | grep -v "healthy" || true)
+            UNHEALTHY=$(docker compose ps --services | xargs -I {} docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q {}) | grep -v "healthy" || true)
             
             if [ -z "$UNHEALTHY" ]; then
               echo "✅ All services are healthy!"
@@ -58,13 +59,13 @@ jobs:
           done
           
           echo "❌ Timed out waiting for services to be healthy."
-          docker-compose ps
-          docker-compose logs
+          docker compose ps
+          docker compose logs
           exit 1
 
       - name: Stop Containers
         if: always()
-        run: docker-compose down -v
+        run: docker compose down -v
 
   deploy:
     name: 🚀 Deploy to Raspberry Pi
@@ -127,7 +128,7 @@ jobs:
             EOT
 
             echo "🐳 Rebuilding containers..."
-            docker-compose up -d --build --force-recreate
+            docker compose up -d --build --force-recreate
 
             echo "✅ Deployment Complete."
           EOF
