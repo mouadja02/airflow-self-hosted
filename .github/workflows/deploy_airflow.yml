@@ -1,0 +1,133 @@
+name: 📦 Airflow Deployment Pipeline
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docker-compose.yml'
+      - 'Dockerfile'
+      - 'docker/data/airflow/dags/**'
+      - 'requirements.txt'
+
+jobs:
+  test:
+    name: 🧪 Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env file
+        run: |
+          touch .env
+          echo "AIRFLOW_UID=${{ secrets.AIRFLOW_UID }}" >> .env
+          echo "_AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}" >> .env
+          echo "_AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}" >> .env
+          echo "SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}" >> .env
+          echo "SNOWFLAKE_USER=${{ secrets.SNOWFLAKE_USER }}" >> .env
+          echo "SNOWFLAKE_PASSWORD=${{ secrets.SNOWFLAKE_PASSWORD }}" >> .env
+          echo "SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}" >> .env
+          echo "SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}" >> .env
+          echo "SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}" >> .env
+          echo "SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}" >> .env
+
+      - name: Build and Start Containers
+        run: docker-compose up -d --build
+
+      - name: Wait for Healthchecks
+        id: healthcheck
+        run: |
+          echo "Waiting for services to initialize..."
+          sleep 60 
+          
+          # Loop to check health status for 60 more seconds
+          for i in {1..6}; do
+            UNHEALTHY=$(docker-compose ps --services | xargs -I {} docker inspect --format '{{.State.Health.Status}}' $(docker-compose ps -q {}) | grep -v "healthy" || true)
+            
+            if [ -z "$UNHEALTHY" ]; then
+              echo "✅ All services are healthy!"
+              exit 0
+            fi
+            echo "⏳ Services not healthy yet... waiting 10s"
+            sleep 10
+          done
+          
+          echo "❌ Timed out waiting for services to be healthy."
+          docker-compose ps
+          docker-compose logs
+          exit 1
+
+      - name: Stop Containers
+        if: always()
+        run: docker-compose down -v
+
+  deploy:
+    name: 🚀 Deploy to Raspberry Pi
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Cloudflared & SSH Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+          
+          # Install Cloudflared
+          curl -L https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-archive-keyring.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-archive-keyring.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
+          sudo apt-get update
+          sudo apt-get install cloudflared
+
+      - name: Deploy via SSH
+        env:
+          SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
+          SSH_USER: ${{ secrets.RASPBERRY_PI_USER }}
+          SSH_HOST: ssh.mj-dev.net
+          CF_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          AIRFLOW_PATH: ${{ secrets.AIRFLOW_PATH }}
+          GIT_TOKEN: ${{ secrets.TOKEN }}
+        run: |
+          # 1. Define the ProxyCommand using the Service Tokens
+          # This command tells SSH to use cloudflared, passing the ID/Secret headers
+          PROXY_CMD="cloudflared access ssh --hostname %h --id $CF_ID --secret $CF_SECRET"
+
+          # 2. Run SSHPASS to connect and execute commands
+          sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand="$PROXY_CMD" $SSH_USER@$SSH_HOST << EOF
+            
+            # Stop if any command fails
+            set -e
+
+            echo "📂 Navigating to project..."
+            cd $AIRFLOW_PATH
+
+            echo "⬇️ Pulling latest changes..."
+            git pull origin main
+
+            echo "🔐 Update .env file..."
+            rm -f .env
+            cat <<EOT > .env
+            AIRFLOW_UID=${{ secrets.AIRFLOW_UID }}
+            _AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}
+            _AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}
+            SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}
+            SNOWFLAKE_USER=${{ secrets.SNOWFLAKE_USER }}
+            SNOWFLAKE_PASSWORD=${{ secrets.SNOWFLAKE_PASSWORD }}
+            SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}
+            SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}
+            SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}
+            SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}
+            EOT
+
+            echo "🐳 Rebuilding containers..."
+            docker-compose up -d --build --force-recreate
+
+            echo "✅ Deployment Complete."
+          EOF
