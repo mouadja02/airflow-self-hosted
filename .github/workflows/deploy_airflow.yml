@@ -163,24 +163,31 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-      - name: Quick DAG Sync
+            - name: Quick DAG Sync
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
         run: |
           echo "📂 Syncing changes only (no container rebuild)..."
-          
+
           cat <<'EOF' > sync_changes.sh
           #!/bin/bash
           set -e
-          
+
           echo "📂 Navigating to project..."
           cd ${{ secrets.AIRFLOW_PATH }}
           git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
 
-          echo "⬆️ Pushing RPi changes..."
+          echo "⬆️ Checking for RPi changes..."
           git add .
-          git commit -m "[from RPi] Updated dataset_updater DAG"
-          git push origin main
+          
+          # Check if there are staged changes to commit
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "📝 Changes detected. Committing and pushing..."
+            git commit -m "[from RPi] Updated dataset_updater DAG"
+            git push origin main
+          else
+            echo "✨ No changes to commit from Raspberry Pi."
+          fi
 
           echo "⬇️ Pulling latest changes..."
           git pull origin main
@@ -194,6 +201,7 @@ jobs:
 
           echo "🚀 Executing sync..."
           sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "bash /tmp/sync_changes.sh"
+
 
   deploy-full:
     name: 🚀 Full Rebuild & Deploy
