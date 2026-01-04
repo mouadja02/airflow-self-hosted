@@ -89,15 +89,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y sshpass
-          
-          # Install Cloudflared
           curl -L https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-archive-keyring.gpg >/dev/null
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-archive-keyring.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflared.list
           sudo apt-get update
           sudo apt-get install cloudflared
 
       - name: Configure SSH
-        # THIS IS THE FIX: We write the config to a file to avoid quoting errors
         run: |
           mkdir -p ~/.ssh
           cat > ~/.ssh/config <<EOF
@@ -109,42 +106,51 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-      - name: Deploy Script
+      - name: Prepare Deployment Files
+        run: |
+          # 1. Create the .env file locally on the runner
+          echo "AIRFLOW_UID=${{ secrets.AIRFLOW_UID }}" > .env
+          echo "_AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}" >> .env
+          echo "_AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}" >> .env
+          echo "SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}" >> .env
+          echo "SNOWFLAKE_USER=${{ secrets.SNOWFLAKE_USER }}" >> .env
+          echo "SNOWFLAKE_PASSWORD=${{ secrets.SNOWFLAKE_PASSWORD }}" >> .env
+          echo "SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}" >> .env
+          echo "SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}" >> .env
+          echo "SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}" >> .env
+          echo "SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}" >> .env
+
+          # 2. Create a clean shell script to run on the Pi
+          cat <<EOF > deploy_script.sh
+          #!/bin/bash
+          set -e
+          echo "📂 Navigating to project..."
+          cd ${{ secrets.AIRFLOW_PATH }}
+
+          echo "⬇️ Pulling latest changes..."
+          git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
+          git pull origin main
+
+          echo "🔐 Moving new .env file into place..."
+          mv /tmp/.env .
+
+          echo "🐳 Docker Compose Up..."
+          docker compose down --remove-orphans
+          docker compose up -d --build
+
+          echo "🧹 Cleaning up..."
+          docker image prune -f
+          rm -f /tmp/deploy_script.sh
+          EOF
+
+      - name: Transfer and Execute
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
-          AIRFLOW_PATH: ${{ secrets.AIRFLOW_PATH }}
-          GIT_TOKEN: ${{ secrets.TOKEN }}
         run: |
-          # Now the command is clean because the ProxyCommand is hidden in the config file
-          sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net bash -c "'
-            set -e
+          # 3. Copy .env and script to the Pi's /tmp directory
+          echo "📤 Uploading files to Raspberry Pi..."
+          sshpass -p "$SSH_PASS" scp .env deploy_script.sh ssh.mj-dev.net:/tmp/
 
-            echo \"📂 Navigating to project directory: $AIRFLOW_PATH\"
-            cd $AIRFLOW_PATH
-
-            echo \"⬇️  Pulling latest code...\"
-            # Ensure git uses the token for this pull
-            git remote set-url origin https://$GIT_TOKEN@github.com/mouadja02/airflow-self-hosted.git
-            git pull origin main
-
-            echo \"⚙️  Updating .env file...\"
-            # We rewrite the .env file to ensure latest secrets
-            cat <<ENV_EOF > .env
-            AIRFLOW_UID=${{ secrets.AIRFLOW_UID }}
-            _AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}
-            _AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}
-            SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}
-            SNOWFLAKE_USER=${{ secrets.SNOWFLAKE_USER }}
-            SNOWFLAKE_PASSWORD=${{ secrets.SNOWFLAKE_PASSWORD }}
-            SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}
-            SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}
-            SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}
-            SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}
-            ENV_EOF
-
-            echo \"🐳 Rebuilding and Restarting Containers...\"
-            # Force recreate to ensure new env vars are picked up
-            docker compose up -d --build --remove-orphans
-
-            echo \"✅ Deployment Successfully Completed!\"
-          '"
+          # 4. Execute the script
+          echo "🚀 Executing deployment..."
+          sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "bash /tmp/deploy_script.sh"
