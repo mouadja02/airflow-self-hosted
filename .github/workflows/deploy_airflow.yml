@@ -165,7 +165,19 @@ jobs:
           git pull origin main
 
           echo "🔒 Restoring Airflow permissions..."
-          echo "${{ secrets.RASPBERRY_PI_PASSWORD }}" | sudo -S chown -R 50000:50000 dags/ plugins/ config/
+          echo "${{ secrets.RASPBERRY_PI_PASSWORD }}" | sudo -S chown -R 50000:50000 dags/ config/
+
+          echo "📝 Creating the .env file"
+          echo "AIRFLOW_UID=50000" > .env
+          echo "_AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}" >> .env
+          echo "_AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}" >> .env
+          echo "SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}" >> .env
+          echo "SNOWFLAKE_USER=${{ secrets.SNOWFLAKE_USER }}" >> .env
+          echo "SNOWFLAKE_PASSWORD=${{ secrets.SNOWFLAKE_PASSWORD }}" >> .env
+          echo "SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}" >> .env
+          echo "SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}" >> .env
+          echo "SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}" >> .env
+          echo "SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}" >> .env
 
           echo "✅ Changes synced! Airflow will pick them up automatically."
           rm -f /tmp/sync_changes.sh
