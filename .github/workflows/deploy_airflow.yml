@@ -153,9 +153,15 @@ jobs:
           echo "📂 Navigating to project..."
           cd ${{ secrets.AIRFLOW_PATH }}
 
+          echo "🔓 Fixing permissions before pull..."
+          sudo chown -R $(whoami):$(whoami) .
+
           echo "⬇️ Pulling latest changes..."
           git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
           git pull origin main
+
+          echo "🔒 Restoring Airflow permissions..."
+          sudo chown -R 50000:50000 dags/ logs/ plugins/ config/
 
           echo "✅ Changes synced! Airflow will pick them up automatically."
           rm -f /tmp/sync_changes.sh

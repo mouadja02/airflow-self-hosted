@@ -480,6 +480,7 @@ def get_metrics_config(metric_name):
     
     return configs[metric_name]
 
+
 def download_and_upload_metric(metric_name, **context):
     """Download JSON from API and upload to Snowflake stage"""
     config = get_metrics_config(metric_name)
