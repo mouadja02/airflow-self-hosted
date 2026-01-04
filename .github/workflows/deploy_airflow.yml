@@ -156,6 +156,10 @@ jobs:
           echo "🔓 Fixing permissions before pull..."
           echo "${{ secrets.RASPBERRY_PI_PASSWORD }}" | sudo -S chown -R $(whoami):$(whoami) .
 
+          echo "🧹 Discarding local changes..."
+          git reset --hard HEAD
+          git clean -fd
+
           echo "⬇️ Pulling latest changes..."
           git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
           git pull origin main

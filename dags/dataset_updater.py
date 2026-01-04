@@ -808,7 +808,6 @@ for i in range(1, 5):
     )
 
 
-
 # Create download and merge tasks for batches 1-4
 for batch_num in range(1, 5):
     prev_task = None
