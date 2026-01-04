@@ -83,7 +83,7 @@ dags = {
 # OPTIMIZED METRIC BATCHES - 4 metrics per batch
 batch_metrics = {
     1: [
-        # Core Price & Technical Analysis (7 metrics)
+        # Core Price & Technical Analysis (8 metrics)
         'market_price',           # Current BTC price
         'delta_price_pct',       # Daily momentum
         'mvrv',                  # Market cycle indicator
@@ -106,7 +106,7 @@ batch_metrics = {
 
     ],
     3: [
-        # Supply Metrics & HODLer Analysis (7 metrics)
+        # Supply Metrics & HODLer Analysis (8 metrics)
         'supply_current',        # Total BTC supply
         'long_term_hodler_supply',   # LTH accumulation
         'short_term_hodler_supply',  # STH speculation
@@ -114,7 +114,7 @@ batch_metrics = {
         'realized_profit_sth',   # STH profit taking
         'realized_profit_lth',   # LTH profit taking
         'terminal_price',         # Fair value model
-        'stocks'          # Gold, Silver, SP500, Strategy, Microsoft, Meta, Google, Apple, Amazon and Nvidia 
+        'stocks'                   # Gold, Silver, SP500, Strategy, Microsoft, Meta, Google, Apple, Amazon and Nvidia 
     ],
     4: [
         # Mining, Network & Market (8 metrics)
