@@ -18,4 +18,5 @@ COPY requirements.txt /tmp/requirements.txt
 USER airflow
 
 # Install Python packages
+RUN pip install --upgrade pip
 RUN pip install --no-cache-dir --quiet -r /tmp/requirements.txt

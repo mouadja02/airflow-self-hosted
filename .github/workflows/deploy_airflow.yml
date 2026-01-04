@@ -109,7 +109,7 @@ jobs:
       - name: Prepare Deployment Files
         run: |
           # 1. Create the .env file locally on the runner
-          echo "AIRFLOW_UID=${{ secrets.AIRFLOW_UID }}" > .env
+          echo "AIRFLOW_UID=5000" > .env
           echo "_AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}" >> .env
           echo "_AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}" >> .env
           echo "SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}" >> .env
