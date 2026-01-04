@@ -13,9 +13,32 @@ on:
       - main
 
 jobs:
+  check-skip:
+    name: 🔍 Check if should skip
+    runs-on: ubuntu-latest
+    outputs:
+      should-skip: ${{ steps.check.outputs.should-skip }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check commit message
+        id: check
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          if echo "$COMMIT_MSG" | grep -qi "from RPi\|from raspberry"; then
+            echo "should-skip=true" >> $GITHUB_OUTPUT
+            echo "⏭️ Skipping workflow - commit from Raspberry Pi"
+          else
+            echo "should-skip=false" >> $GITHUB_OUTPUT
+            echo "✅ Running workflow - commit not from Raspberry Pi"
+          fi
+
   detect-changes:
     name: 🔍 Detect Changes
     runs-on: ubuntu-latest
+    needs: check-skip
+    if: needs.check-skip.outputs.should-skip == 'false'
     outputs:
       needs-rebuild: ${{ steps.filter.outputs.needs-rebuild }}
     steps:
@@ -54,8 +77,8 @@ jobs:
   test:
     name: 🧪 Build & Test
     runs-on: ubuntu-latest
-    needs: detect-changes
-    if: needs.detect-changes.outputs.needs-rebuild == 'true'
+    needs: [check-skip, detect-changes]
+    if: needs.check-skip.outputs.should-skip == 'false' && needs.detect-changes.outputs.needs-rebuild == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -112,8 +135,8 @@ jobs:
   deploy-dags-only:
     name: 🚀 Sync Changes Only
     runs-on: ubuntu-latest
-    needs: detect-changes
-    if: needs.detect-changes.outputs.needs-rebuild == 'false'
+    needs: [check-skip, detect-changes]
+    if: needs.check-skip.outputs.should-skip == 'false' && needs.detect-changes.outputs.needs-rebuild == 'false'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -152,32 +175,15 @@ jobs:
           
           echo "📂 Navigating to project..."
           cd ${{ secrets.AIRFLOW_PATH }}
+          git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
 
-          echo "🔓 Fixing permissions before pull..."
-          echo "${{ secrets.RASPBERRY_PI_PASSWORD }}" | sudo -S chown -R $(whoami):$(whoami) .
-
-          echo "🧹 Discarding local changes..."
-          git reset --hard HEAD
-          git clean -fd
+          echo "⬆️ Pushing RPi changes..."
+          git add .
+          git commit -m "[from RPi] Updated dataset_updater DAG"
+          git push origin main
 
           echo "⬇️ Pulling latest changes..."
-          git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
           git pull origin main
-
-          echo "🔒 Restoring Airflow permissions..."
-          echo "${{ secrets.RASPBERRY_PI_PASSWORD }}" | sudo -S chown -R 50000:50000 dags/ config/
-
-          echo "📝 Creating the .env file"
-          echo "AIRFLOW_UID=50000" > .env
-          echo "_AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}" >> .env
-          echo "_AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}" >> .env
-          echo "SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}" >> .env
-          echo "SNOWFLAKE_USER=${{ secrets.SNOWFLAKE_USER }}" >> .env
-          echo "SNOWFLAKE_PASSWORD=${{ secrets.SNOWFLAKE_PASSWORD }}" >> .env
-          echo "SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}" >> .env
-          echo "SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}" >> .env
-          echo "SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}" >> .env
-          echo "SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}" >> .env
 
           echo "✅ Changes synced! Airflow will pick them up automatically."
           rm -f /tmp/sync_changes.sh
@@ -192,8 +198,8 @@ jobs:
   deploy-full:
     name: 🚀 Full Rebuild & Deploy
     runs-on: ubuntu-latest
-    needs: [detect-changes, test]
-    if: needs.detect-changes.outputs.needs-rebuild == 'true'
+    needs: [check-skip, detect-changes, test]
+    if: needs.check-skip.outputs.should-skip == 'false' && needs.detect-changes.outputs.needs-rebuild == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
