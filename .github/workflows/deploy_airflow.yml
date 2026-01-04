@@ -167,9 +167,12 @@ jobs:
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
         run: |
+          echo "🔧 Fixing file permissions on Raspberry Pi..."
+          sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "echo '$SSH_PASS' | sudo -S chown -R \$(whoami) ${{ secrets.AIRFLOW_PATH }}"
+
           echo "📂 Syncing changes only (no container rebuild)..."
 
-          cat <<'EOF' > sync_changes.sh
+          cat <<EOF > sync_changes.sh
           #!/bin/bash
           set -e
 
@@ -179,9 +182,8 @@ jobs:
 
           echo "⬆️ Checking for RPi changes..."
           git add .
-          
-          # Check if there are staged changes to commit
-          if [ -n "$(git status --porcelain)" ]; then
+
+          if [ -n "\$(git status --porcelain)" ]; then
             echo "📝 Changes detected. Committing and pushing..."
             git commit -m "[from RPi] Updated dataset_updater DAG"
             git push origin main
@@ -192,6 +194,9 @@ jobs:
           echo "⬇️ Pulling latest changes..."
           git pull origin main
 
+          echo "🔒 Resetting permissions for Airflow..."
+          echo '$SSH_PASS' | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
+
           echo "✅ Changes synced! Airflow will pick them up automatically."
           rm -f /tmp/sync_changes.sh
           EOF
@@ -201,7 +206,6 @@ jobs:
 
           echo "🚀 Executing sync..."
           sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "bash /tmp/sync_changes.sh"
-
 
   deploy-full:
     name: 🚀 Full Rebuild & Deploy
