@@ -18,7 +18,7 @@ on:
     paths:
       - 'docker-compose.yml'
       - 'Dockerfile'
-      - 'docker/data/airflow/dags/**'
+      - 'dags/**'
       - 'requirements.txt'
 
 jobs:
@@ -144,11 +144,7 @@ jobs:
 
             echo \"🐳 Rebuilding and Restarting Containers...\"
             # Force recreate to ensure new env vars are picked up
-            docker compose down --remove-orphans
-            docker compose up -d --build
-
-            echo \"🧹 Cleaning up unused images...\"
-            docker image prune -f
+            docker compose up -d --build --remove-orphans
 
             echo \"✅ Deployment Successfully Completed!\"
           '"
