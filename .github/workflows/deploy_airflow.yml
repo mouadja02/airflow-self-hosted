@@ -2,11 +2,20 @@ name: 📦 Airflow Deployment Pipeline
 
 on:
   workflow_dispatch:
+    inputs:
+      steps:
+        description: 'Select which steps to run'
+        required: false
+        default: 'test,deploy'
+        type: choice
+        options:
+          - 'test'
+          - 'deploy'
+          - 'all'
   push:
     branches:
       - main
     paths:
-      - '.github/workflows/deploy_airflow.yml'
       - 'docker-compose.yml'
       - 'Dockerfile'
       - 'docker/data/airflow/dags/**'
@@ -16,6 +25,7 @@ jobs:
   test:
     name: 🧪 Build & Test
     runs-on: ubuntu-latest
+    if: github.event.inputs.steps == 'test' || github.event.inputs.steps == 'all' || github.event_name == 'push'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,7 +80,7 @@ jobs:
   deploy:
     name: 🚀 Deploy to Raspberry Pi
     runs-on: ubuntu-latest
-    needs: test
+    if: github.event.inputs.steps == 'deploy' || github.event.inputs.steps == 'all' || github.event_name == 'push'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -86,35 +96,40 @@ jobs:
           sudo apt-get update
           sudo apt-get install cloudflared
 
-      - name: Deploy via SSH
+      - name: Configure SSH
+        # THIS IS THE FIX: We write the config to a file to avoid quoting errors
+        run: |
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/config <<EOF
+          Host ssh.mj-dev.net
+            User ${{ secrets.RASPBERRY_PI_USER }}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ProxyCommand cloudflared access ssh --hostname %h --id ${{ secrets.CF_ACCESS_CLIENT_ID }} --secret ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Deploy Script
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
-          SSH_USER: ${{ secrets.RASPBERRY_PI_USER }}
-          SSH_HOST: ssh.mj-dev.net
-          CF_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-          CF_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           AIRFLOW_PATH: ${{ secrets.AIRFLOW_PATH }}
           GIT_TOKEN: ${{ secrets.TOKEN }}
         run: |
-          # 1. Define the ProxyCommand using the Service Tokens
-          # This command tells SSH to use cloudflared, passing the ID/Secret headers
-          PROXY_CMD="cloudflared access ssh --hostname %h --id $CF_ID --secret $CF_SECRET"
-
-          # 2. Run SSHPASS to connect and execute commands
-          sshpass -p "$SSH_PASS" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand="$PROXY_CMD" $SSH_USER@$SSH_HOST << EOF
-            
-            # Stop if any command fails
+          # Now the command is clean because the ProxyCommand is hidden in the config file
+          sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net bash -c "'
             set -e
 
-            echo "📂 Navigating to project..."
+            echo \"📂 Navigating to project directory: $AIRFLOW_PATH\"
             cd $AIRFLOW_PATH
 
-            echo "⬇️ Pulling latest changes..."
+            echo \"⬇️  Pulling latest code...\"
+            # Ensure git uses the token for this pull
+            git remote set-url origin https://$GIT_TOKEN@github.com/mouadja02/airflow-self-hosted.git
             git pull origin main
 
-            echo "🔐 Update .env file..."
-            rm -f .env
-            cat <<EOT > .env
+            echo \"⚙️  Updating .env file...\"
+            # We rewrite the .env file to ensure latest secrets
+            cat <<ENV_EOF > .env
             AIRFLOW_UID=${{ secrets.AIRFLOW_UID }}
             _AIRFLOW_WWW_USER_USERNAME=${{ secrets._AIRFLOW_WWW_USER_USERNAME }}
             _AIRFLOW_WWW_USER_PASSWORD=${{ secrets._AIRFLOW_WWW_USER_PASSWORD }}
@@ -125,10 +140,15 @@ jobs:
             SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}
             SNOWFLAKE_SCHEMA=${{ secrets.SNOWFLAKE_SCHEMA }}
             SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}
-            EOT
+            ENV_EOF
 
-            echo "🐳 Rebuilding containers..."
-            docker compose up -d --build --force-recreate
+            echo \"🐳 Rebuilding and Restarting Containers...\"
+            # Force recreate to ensure new env vars are picked up
+            docker compose down --remove-orphans
+            docker compose up -d --build
 
-            echo "✅ Deployment Complete."
-          EOF
+            echo \"🧹 Cleaning up unused images...\"
+            docker image prune -f
+
+            echo \"✅ Deployment Successfully Completed!\"
+          '"
