@@ -1,3 +1,6 @@
+# Docker Compose file for Apache Airflow deployment
+
+# Common configuration for Airflow services
 x-airflow-common:
   &airflow-common
   build: .
@@ -45,6 +48,7 @@ x-airflow-common:
     postgres:
       condition: service_healthy
 
+# Define services
 services:
   postgres:
     image: postgres:13-alpine
@@ -237,10 +241,12 @@ services:
       _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
 
+# Define named volumes
 volumes:
   postgres_data:
   mlflow_data:
 
+# Define custom networks
 networks:
   airflow_network:
     driver: bridge
