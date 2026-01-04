@@ -807,7 +807,6 @@ for i in range(1, 5):
         dag=dags[i]
     )
 
-
 # Create download and merge tasks for batches 1-4
 for batch_num in range(1, 5):
     prev_task = None

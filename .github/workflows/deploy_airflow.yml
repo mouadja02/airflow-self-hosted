@@ -165,7 +165,7 @@ jobs:
           git pull origin main
 
           echo "🔒 Restoring Airflow permissions..."
-          echo "${{ secrets.RASPBERRY_PI_PASSWORD }}" | sudo -S chown -R 50000:50000 dags/ logs/ plugins/ config/
+          echo "${{ secrets.RASPBERRY_PI_PASSWORD }}" | sudo -S chown -R 50000:50000 dags/ plugins/ config/
 
           echo "✅ Changes synced! Airflow will pick them up automatically."
           rm -f /tmp/sync_changes.sh
