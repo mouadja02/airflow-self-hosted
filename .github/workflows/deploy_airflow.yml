@@ -203,6 +203,9 @@ jobs:
           echo "🔒 Resetting permissions for Airflow..."
           echo '$SSH_PASS' | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
 
+          echo "⚙️ Rebuilding the container..."
+          docker compose up -d --build  --force-recreate
+
           echo "✅ Changes synced! Airflow will pick them up automatically."
           rm -f /tmp/sync_changes.sh
           EOF
