@@ -48,6 +48,7 @@ x-airflow-common:
     postgres:
       condition: service_healthy
 
+
 # Define services
 services:
   postgres:
