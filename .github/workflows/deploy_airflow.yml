@@ -163,7 +163,7 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-            - name: Quick DAG Sync
+      - name: Quick DAG Sync
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
         run: |
