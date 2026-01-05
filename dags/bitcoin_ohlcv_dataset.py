@@ -288,6 +288,7 @@ def fetch_btc_data(**context):
         'limit': '48'
     }
     
+    
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()

@@ -39,6 +39,7 @@ dag = DAG(
     max_active_runs=1,
 )
 
+
 def check_table_status(**context):
     """
     Check if HOURLY_TA table needs initialization or just delta update
