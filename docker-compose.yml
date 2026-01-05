@@ -37,6 +37,9 @@ x-airflow-common:
     SNOWFLAKE_SCHEMA: ${SNOWFLAKE_SCHEMA}
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
     TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+    PINECONE_API_KEY: ${PINECONE_API_KEY}
+    PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME}
+    OPENAI_API_KEY: ${OPENAI_API_KEY}
   volumes:
     - ./config:/opt/airflow/config
     - ./dags:/opt/airflow/dags

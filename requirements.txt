@@ -6,3 +6,9 @@ apache-airflow-providers-github
 pandas
 numpy
 ta-lib
+beautifulsoup4
+lxml
+pinecone
+openai
+python-dotenv
+tqdm

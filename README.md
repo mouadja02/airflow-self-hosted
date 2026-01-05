@@ -36,12 +36,19 @@ This Airflow infrastructure serves various personal data engineering projects:
 
 1. **Trading Agent Data Pipeline** (Primary)
    - Fetches Bitcoin hourly OHLCV data from CryptoCompare API
+   - Historical backfill from 2010 with intelligent batching
    - Calculates 110+ technical indicators using TA-Lib
    - Stores data in Snowflake for ML model training
    - Provides fresh data for algorithmic trading strategies
 
-2. **Future Projects** (Examples)
-   - Web scraping and data collection
+2. **Snowflake Documentation Scraper** (Knowledge Base)
+   - Scrapes Snowflake documentation for SnowPro Core exam prep
+   - Delta-mode scraping (only new/updated pages)
+   - Parallel web scraping with rate limiting
+   - Vector embeddings with OpenAI for semantic search
+   - Pinecone vector database for RAG applications
+
+3. **Future Projects** (Examples)
    - ETL pipelines for personal analytics
    - Social media data aggregation
    - IoT sensor data processing
@@ -51,9 +58,9 @@ This Airflow infrastructure serves various personal data engineering projects:
 
 The repository includes production-ready example DAGs:
 
-- **`bitcoin_ohlcv_dataset.py`**: Bitcoin price data collection
+- **`bitcoin_ohlcv_dataset.py`**: Bitcoin price data collection with historical backfill
 - **`technical_indicators_dag.py`**: Technical analysis calculations
-- **`dataset_updater.py`**: Legacy example (deprecated)
+- **`snowflake_docs_db_dag.py`**: Documentation scraper with vector embeddings
 
 These DAGs demonstrate best practices and can be used as templates for your own projects.
 
@@ -63,10 +70,11 @@ These DAGs demonstrate best practices and can be used as templates for your own 
 
 ```
 airflow-self-hosted/
-├── dags/                          # Airflow DAGs directory
-│   ├── bitcoin_ohlcv_dataset.py  # Example: Bitcoin data pipeline
-│   ├── technical_indicators_dag.py # Example: TA calculations
-│   └── your_custom_dag.py        # Add your own DAGs here
+├── dags/                             # Airflow DAGs directory
+│   ├── bitcoin_ohlcv_dataset.py     # Bitcoin price data with backfill
+│   ├── technical_indicators_dag.py  # Technical analysis calculations
+│   ├── snowflake_docs_db_dag.py     # Documentation scraper + RAG
+│   └── your_custom_dag.py           # Add your own DAGs here
 ├── config/
 │   └── airflow.cfg               # Airflow configuration
 ├── docker/
@@ -111,6 +119,8 @@ airflow-self-hosted/
 - **Cloudflare Tunnel**: For secure remote access (free)
 - **Telegram Bot**: For notifications (free)
 - **GitHub**: For CI/CD automation (free)
+- **OpenAI API**: For embeddings generation (pay-as-you-go)
+- **Pinecone**: For vector database storage (free tier available)
 
 ---
 
@@ -145,6 +155,11 @@ SNOWFLAKE_ROLE=your_role
 # Optional: Telegram Notifications
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
+
+# Optional: OpenAI & Pinecone (for documentation scraper)
+OPENAI_API_KEY=your_openai_api_key
+PINECONE_API_KEY=your_pinecone_api_key
+PINECONE_INDEX_NAME=snowflake-docs
 ```
 
 ### 3. Start Airflow Locally
@@ -672,19 +687,43 @@ docker/data/airflow/logs/dag_id=your_dag/run_id=*/task_id=*/
 
 ## 🎯 Example Projects Using This Infrastructure
 
-### 1. Trading Agent Data Pipeline (Included)
+### 1. Trading Agent Data Pipeline
 
 **Purpose**: Provide fresh market data for algorithmic trading
 
 **DAGs:**
-- `bitcoin_ohlcv_dataset.py`: Fetches Bitcoin OHLCV data
+- `bitcoin_ohlcv_dataset.py`: Fetches Bitcoin OHLCV data with historical backfill
 - `technical_indicators_dag.py`: Calculates 110+ technical indicators
 
-**Schedule**: Hourly updates
+**Features:**
+- Intelligent historical data initialization from 2010
+- Branching logic to skip backfill if data exists
+- Batch processing with rate limiting
+- Delta updates for recent data
+
+**Schedule**: Daily at 00:05 UTC
 **Data Destination**: Snowflake data warehouse
 **Downstream Use**: ML model training, backtesting, live trading
 
-### 2. Your Custom Projects (Add Your Own!)
+### 2. Snowflake Documentation Knowledge Base
+
+**Purpose**: Create searchable vector database of Snowflake documentation
+
+**DAG:**
+- `snowflake_docs_db_dag.py`: Scrapes and vectorizes documentation
+
+**Features:**
+- Delta-mode scraping (only new/changed URLs)
+- Parallel web scraping with ThreadPoolExecutor
+- OpenAI embeddings for semantic search
+- Pinecone vector storage for RAG applications
+- Airflow Variable tracking of scraped URLs
+
+**Schedule**: Weekly on Sunday at 2 AM
+**Data Destination**: Pinecone vector database
+**Downstream Use**: SnowPro Core exam preparation, RAG chatbot
+
+### 3. Your Custom Projects (Add Your Own!)
 
 **Examples:**
 - Web scraping for price monitoring
