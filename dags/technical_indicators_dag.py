@@ -33,7 +33,7 @@ dag = DAG(
     'technical_indicators_update',
     default_args=default_args,
     description='Update HOURLY_TA table with technical indicators using TA-Lib',
-    schedule='15 * * * *',
+    schedule='15 0 * * *',
     catchup=False,
     tags=['bitcoin', 'technical-analysis', 'hourly', 'snowflake'],
     max_active_runs=1,

@@ -32,14 +32,13 @@ dag = DAG(
     'btc_price_dataset',
     default_args=default_args,
     description='Fetch Bitcoin hourly price data and store in Snowflake',
-    schedule='01 * * * *',  # Every hour
+    schedule='5 0 * * *',  # Every day after midnight UTC
     catchup=False,
     tags=['bitcoin', 'cryptocurrency', 'snowflake'],
 )
 
 # Bitcoin started trading in July 2010 (first exchange Mt.Gox)
-# But we'll use January 2009 (genesis block) as requested
-BTC_START_TIMESTAMP = int(datetime(2009, 1, 3).timestamp())  # Genesis block date
+BTC_START_TIMESTAMP = int(datetime(2010, 7, 18).timestamp())
 
 def check_historical_data_exists(**context):
     """Check if historical data exists in Snowflake from BTC start"""
@@ -289,7 +288,7 @@ def fetch_btc_data(**context):
     params = {
         'fsym': 'BTC',
         'tsym': 'USD',
-        'limit': '48'
+        'limit': '1000'
     }
     
     
