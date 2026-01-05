@@ -129,7 +129,7 @@ Create a `.env` file in the project root:
 
 ```env
 # Airflow Configuration
-AIRFLOW_UID=50000
+AIRFLOW_UID=1000
 _AIRFLOW_WWW_USER_USERNAME=admin
 _AIRFLOW_WWW_USER_PASSWORD=your_secure_password_here
 
@@ -223,7 +223,7 @@ Go to your repository → Settings → Secrets and variables → Actions, and ad
 
 **Required Secrets:**
 ```
-AIRFLOW_UID                        # 50000
+AIRFLOW_UID                       # 1000
 _AIRFLOW_WWW_USER_USERNAME        # admin
 _AIRFLOW_WWW_USER_PASSWORD        # Strong password
 RASPBERRY_PI_USER                 # SSH username

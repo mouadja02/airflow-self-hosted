@@ -43,7 +43,7 @@ x-airflow-common:
     - ./plugins:/opt/airflow/plugins
     - ./docker/data/airflow/logs:/opt/airflow/logs
     - ./docker/data/airflow/config:/opt/airflow/config
-  user: "${AIRFLOW_UID:-50000}:0"
+  user: "${AIRFLOW_UID:-1000}:0"
   networks:
     - airflow_network
   depends_on:
