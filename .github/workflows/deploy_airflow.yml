@@ -169,12 +169,12 @@ jobs:
         run: |
           echo "📂 Syncing changes only (no container rebuild)..."
 
-          cat <<EOF > sync_changes.sh
+          cat <<'EOF' > sync_changes.sh
           #!/bin/bash
           set -e
 
           echo "🔧 Fixing file permissions for git operations..."
-          echo '$SSH_PASS' | sudo -S chown -R \$(whoami):\$(whoami) ${{ secrets.AIRFLOW_PATH }}
+          cat /tmp/.ssh_pass | sudo -S chown -R $(whoami):$(whoami) ${{ secrets.AIRFLOW_PATH }}
 
           echo "📂 Navigating to project..."
           cd ${{ secrets.AIRFLOW_PATH }}
@@ -189,7 +189,7 @@ jobs:
           echo "⬆️ Checking for RPi changes..."
           git add .
 
-          if [ -n "\$(git status --porcelain)" ]; then
+          if [ -n "$(git status --porcelain)" ]; then
             echo "📝 Local changes detected. Stashing and pulling..."
             git stash
             git pull origin main
@@ -204,18 +204,21 @@ jobs:
           fi
 
           echo "🔒 Resetting permissions for Airflow (keeping .git accessible)..."
-          echo '$SSH_PASS' | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
-          echo '$SSH_PASS' | sudo -S chown -R \$(whoami):\$(whoami) ${{ secrets.AIRFLOW_PATH }}/.git
+          cat /tmp/.ssh_pass | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
+          cat /tmp/.ssh_pass | sudo -S chown -R $(whoami):$(whoami) ${{ secrets.AIRFLOW_PATH }}/.git
 
           echo "⚙️ Restarting containers..."
           docker compose restart
 
           echo "✅ Changes synced! Airflow will pick them up automatically."
-          rm -f /tmp/sync_changes.sh
+          rm -f /tmp/sync_changes.sh /tmp/.ssh_pass
           EOF
 
           echo "📤 Uploading sync script..."
-          sshpass -p "$SSH_PASS" scp sync_changes.sh ssh.mj-dev.net:/tmp/
+          # Upload password to temp file for sudo operations
+          echo "$SSH_PASS" > .ssh_pass
+          sshpass -p "$SSH_PASS" scp sync_changes.sh .ssh_pass ssh.mj-dev.net:/tmp/
+          rm -f .ssh_pass
 
           echo "🚀 Executing sync..."
           sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "bash /tmp/sync_changes.sh"
@@ -289,12 +292,12 @@ jobs:
             grep -E "ERROR|WARNING|Building|Built|Created|Started|^$" || true
 
           echo "🔒 Resetting permissions for Airflow (keeping .git accessible)..."
-          echo '$SSH_PASS' | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
-          echo '$SSH_PASS' | sudo -S chown -R $(whoami):$(whoami) ${{ secrets.AIRFLOW_PATH }}/.git
+          cat /tmp/.ssh_pass | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
+          cat /tmp/.ssh_pass | sudo -S chown -R $(whoami):$(whoami) ${{ secrets.AIRFLOW_PATH }}/.git
 
           echo "🧹 Cleaning up..."
           docker image prune -f > /dev/null 2>&1
-          rm -f /tmp/deploy_script.sh
+          rm -f /tmp/deploy_script.sh /tmp/.ssh_pass
           
           echo "✅ Full Deployment Successfully Completed!"
           EOF
@@ -307,7 +310,10 @@ jobs:
           sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "echo '$SSH_PASS' | sudo -S chown -R \$(whoami):\$(whoami) ${{ secrets.AIRFLOW_PATH }}"
 
           echo "📤 Uploading files to Raspberry Pi..."
-          sshpass -p "$SSH_PASS" scp .env deploy_script.sh ssh.mj-dev.net:/tmp/
+          # Upload password to temp file for sudo operations
+          echo "$SSH_PASS" > .ssh_pass
+          sshpass -p "$SSH_PASS" scp .env deploy_script.sh .ssh_pass ssh.mj-dev.net:/tmp/
+          rm -f .ssh_pass
 
           echo "🚀 Executing full deployment..."
           sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "bash /tmp/deploy_script.sh"
