@@ -5,13 +5,12 @@ Runs weekly to update Pinecone vector database
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.models import Variable
+from airflow.sdk import Variable
 from datetime import datetime
 import requests
 import os
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
-import json
 import time
 from pinecone import Pinecone, ServerlessSpec
 from openai import OpenAI
