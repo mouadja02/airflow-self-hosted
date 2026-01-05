@@ -167,17 +167,20 @@ jobs:
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
         run: |
-          echo "🔧 Fixing file permissions on Raspberry Pi..."
-          sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "echo '$SSH_PASS' | sudo -S chown -R \$(whoami) ${{ secrets.AIRFLOW_PATH }}"
-
           echo "📂 Syncing changes only (no container rebuild)..."
 
           cat <<EOF > sync_changes.sh
           #!/bin/bash
           set -e
 
+          echo "🔧 Fixing file permissions for git operations..."
+          echo '$SSH_PASS' | sudo -S chown -R \$(whoami):\$(whoami) ${{ secrets.AIRFLOW_PATH }}
+
           echo "📂 Navigating to project..."
           cd ${{ secrets.AIRFLOW_PATH }}
+          
+          # Configure git safe directory
+          git config --global --add safe.directory ${{ secrets.AIRFLOW_PATH }}
           git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
 
           echo "⬇️ Fetching latest changes first..."
@@ -200,11 +203,12 @@ jobs:
             git pull origin main
           fi
 
-          echo "🔒 Resetting permissions for Airflow..."
+          echo "🔒 Resetting permissions for Airflow (keeping .git accessible)..."
           echo '$SSH_PASS' | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
+          echo '$SSH_PASS' | sudo -S chown -R \$(whoami):\$(whoami) ${{ secrets.AIRFLOW_PATH }}/.git
 
-          echo "⚙️ Rebuilding the container..."
-          docker compose up -d --build  --force-recreate
+          echo "⚙️ Restarting containers..."
+          docker compose restart
 
           echo "✅ Changes synced! Airflow will pick them up automatically."
           rm -f /tmp/sync_changes.sh
@@ -269,6 +273,9 @@ jobs:
           echo "📂 Navigating to project..."
           cd ${{ secrets.AIRFLOW_PATH }}
 
+          # Configure git safe directory
+          git config --global --add safe.directory ${{ secrets.AIRFLOW_PATH }}
+
           echo "⬇️ Pulling latest changes..."
           git remote set-url origin https://${{ secrets.TOKEN }}@github.com/mouadja02/airflow-self-hosted.git
           git pull origin main
@@ -281,6 +288,10 @@ jobs:
             grep -vE "Pulling|Download|Extracting|Waiting|Pull complete|Already exists|sha256" | \
             grep -E "ERROR|WARNING|Building|Built|Created|Started|^$" || true
 
+          echo "🔒 Resetting permissions for Airflow (keeping .git accessible)..."
+          echo '$SSH_PASS' | sudo -S chown -R 50000:50000 ${{ secrets.AIRFLOW_PATH }}
+          echo '$SSH_PASS' | sudo -S chown -R $(whoami):$(whoami) ${{ secrets.AIRFLOW_PATH }}/.git
+
           echo "🧹 Cleaning up..."
           docker image prune -f > /dev/null 2>&1
           rm -f /tmp/deploy_script.sh
@@ -292,6 +303,9 @@ jobs:
         env:
           SSH_PASS: ${{ secrets.RASPBERRY_PI_PASSWORD }}
         run: |
+          echo "🔧 Fixing file permissions on Raspberry Pi..."
+          sshpass -p "$SSH_PASS" ssh ssh.mj-dev.net "echo '$SSH_PASS' | sudo -S chown -R \$(whoami):\$(whoami) ${{ secrets.AIRFLOW_PATH }}"
+
           echo "📤 Uploading files to Raspberry Pi..."
           sshpass -p "$SSH_PASS" scp .env deploy_script.sh ssh.mj-dev.net:/tmp/
 
