@@ -16,6 +16,7 @@ x-airflow-common:
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 240
     AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: 360
+    AIRFLOW__LOGGING__REMOTE_LOGGING: False
     # Pi Optimizations
     # To be removed if not running on a Raspberry Pi
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -34,6 +35,8 @@ x-airflow-common:
     SNOWFLAKE_WAREHOUSE: ${SNOWFLAKE_WAREHOUSE}
     SNOWFLAKE_DATABASE: ${SNOWFLAKE_DATABASE}
     SNOWFLAKE_SCHEMA: ${SNOWFLAKE_SCHEMA}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+    TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
   volumes:
     - ./config:/opt/airflow/config
     - ./dags:/opt/airflow/dags

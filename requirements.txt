@@ -5,3 +5,4 @@ apache-airflow-providers-http
 apache-airflow-providers-github
 pandas
 numpy
+ta-lib
