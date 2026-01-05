@@ -135,7 +135,7 @@ def initialize_historical_data(**context):
             HIGH,
             CLOSE,
             LOW,
-            VOLUME
+            VOLUME_USD as VOLUME
         FROM BITCOIN_DATA.DATA.BTC_HOURLY_DATA
         ORDER BY UNIX_TIMESTAMP ASC
         """
@@ -206,7 +206,7 @@ def process_delta_data(**context):
             HIGH,
             CLOSE,
             LOW,
-            VOLUME
+            VOLUME_USD as VOLUME
         FROM BITCOIN_DATA.DATA.BTC_HOURLY_DATA
         ORDER BY UNIX_TIMESTAMP DESC
         LIMIT 1000

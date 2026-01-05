@@ -92,7 +92,8 @@ def create_table_if_not_exists(**context):
         HIGH FLOAT,
         CLOSE FLOAT,
         LOW FLOAT,
-        VOLUME FLOAT,
+        VOLUME_BTC FLOAT,
+        VOLUME_USD FLOAT,
         CREATED_AT TIMESTAMP_NTZ
     )
     """
@@ -205,7 +206,8 @@ def process_all_historical_batches(**context):
                 date = date_obj.strftime('%Y-%m-%d')
                 hour = date_obj.hour
                 
-                value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumeto']}, '{current_timestamp}')"
+                # Store both BTC volume and USD volume
+                value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumefrom']}, {record['volumeto']}, '{current_timestamp}')"
                 bulk_values.append(value_string)
             
             if bulk_values:
@@ -259,8 +261,9 @@ USING (
          column5 AS HIGH, 
          column6 AS CLOSE, 
          column7 AS LOW, 
-         column8 AS VOLUME,
-         column9 AS CREATED_AT
+         column8 AS VOLUME_BTC,
+         column9 AS VOLUME_USD,
+         column10 AS CREATED_AT
   FROM VALUES
   {bulk_values_str}
 ) AS source
@@ -270,12 +273,13 @@ WHEN MATCHED THEN UPDATE SET
   target.HIGH = source.HIGH,
   target.CLOSE = source.CLOSE,
   target.LOW = source.LOW,
-  target.VOLUME = source.VOLUME,
+  target.VOLUME_BTC = source.VOLUME_BTC,
+  target.VOLUME_USD = source.VOLUME_USD,
   target.CREATED_AT = source.CREATED_AT
 WHEN NOT MATCHED THEN INSERT
-  (UNIX_TIMESTAMP, DATE, HOUR_OF_DAY, OPEN, HIGH, CLOSE, LOW, VOLUME, CREATED_AT)
+  (UNIX_TIMESTAMP, DATE, HOUR_OF_DAY, OPEN, HIGH, CLOSE, LOW, VOLUME_BTC, VOLUME_USD, CREATED_AT)
 VALUES
-  (source.UNIX_TIMESTAMP, source.DATE, source.HOUR_OF_DAY, source.OPEN, source.HIGH, source.CLOSE, source.LOW, source.VOLUME, source.CREATED_AT);
+  (source.UNIX_TIMESTAMP, source.DATE, source.HOUR_OF_DAY, source.OPEN, source.HIGH, source.CLOSE, source.LOW, source.VOLUME_BTC, source.VOLUME_USD, source.CREATED_AT);
 """
 
 def fetch_btc_data(**context):
@@ -321,6 +325,7 @@ def transform_btc_data(**context):
         date = date_obj.strftime('%Y-%m-%d')
         hour = date_obj.hour
         
+        # Store both BTC volume and USD volume
         value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumefrom']}, {record['volumeto']}, '{current_timestamp}')"
         bulk_values.append(value_string)
     
