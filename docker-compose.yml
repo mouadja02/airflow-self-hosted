@@ -18,7 +18,6 @@ x-airflow-common:
     AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: 360
     AIRFLOW__LOGGING__REMOTE_LOGGING: False
     # Pi Optimizations
-    # To be removed if not running on a Raspberry Pi
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__PARALLELISM: 8
     AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 4
@@ -40,10 +39,13 @@ x-airflow-common:
     PINECONE_API_KEY: ${PINECONE_API_KEY}
     PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME}
     OPENAI_API_KEY: ${OPENAI_API_KEY}
+    VAULT_URL: ${VAULT_URL}
+    VAULT_TOKEN: ${VAULT_TOKEN}
   volumes:
     - ./config:/opt/airflow/config
     - ./dags:/opt/airflow/dags
     - ./plugins:/opt/airflow/plugins
+    - ./snowflake:/opt/airflow/snowflake
     - ./docker/data/airflow/logs:/opt/airflow/logs
     - ./docker/data/airflow/config:/opt/airflow/config
   user: "${AIRFLOW_UID:-1000}:0"
@@ -209,14 +211,14 @@ services:
         echo
         echo "Creating missing opt dirs if missing:"
         echo
-        mkdir -v -p /opt/airflow/{logs,dags,plugins,config}
+        mkdir -v -p /opt/airflow/{logs,dags,plugins,config,migrations}
         echo
         echo "Airflow version:"
         /entrypoint airflow version
         echo
         echo "Files in shared volumes:"
         echo
-        ls -la /opt/airflow/{logs,dags,plugins,config}
+        ls -la /opt/airflow/{logs,dags,plugins,config,migrations}
         echo
         echo "Running airflow config list to create default config file if missing."
         echo
@@ -224,7 +226,7 @@ services:
         echo
         echo "Files in shared volumes:"
         echo
-        ls -la /opt/airflow/{logs,dags,plugins,config}
+        ls -la /opt/airflow/{logs,dags,plugins,config,migrations}
         echo
         echo "Change ownership of files in /opt/airflow to ${AIRFLOW_UID}:0"
         echo
@@ -232,11 +234,11 @@ services:
         echo
         echo "Change ownership of files in shared volumes to ${AIRFLOW_UID}:0"
         echo
-        chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config}
+        chown -v -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins,config,migrations}
         echo
         echo "Files in shared volumes:"
         echo
-        ls -la /opt/airflow/{logs,dags,plugins,config}
+        ls -la /opt/airflow/{logs,dags,plugins,config,migrations}
         
     # yamllint enable rule:line-length
     environment:
