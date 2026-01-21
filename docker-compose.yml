@@ -39,6 +39,7 @@ x-airflow-common:
     PINECONE_API_KEY: ${PINECONE_API_KEY}
     PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME}
     OPENAI_API_KEY: ${OPENAI_API_KEY}
+    GITHUB_TOKEN: ${GITHUB_TOKEN}
     # Next feature to be implemented
     VAULT_URL: ${VAULT_URL} 
     VAULT_TOKEN: ${VAULT_TOKEN}

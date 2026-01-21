@@ -148,7 +148,7 @@ def get_table_list(database_name: str, **context):
         # Get all tables in the database
         cursor.execute(f"""
             SELECT TABLE_SCHEMA, TABLE_NAME
-            FROM INFORMATION_SCHEMA.TABLES
+            FROM {database_name}.INFORMATION_SCHEMA.TABLES
             WHERE TABLE_CATALOG = '{database_name}'
             AND TABLE_TYPE = 'BASE TABLE';
 
@@ -182,7 +182,7 @@ def get_schemas_list(database_name: str, **context):
         # Get all schemas in the database
         cursor.execute(f"""
             SELECT DISTINCT SCHEMA_NAME
-            FROM INFORMATION_SCHEMA.SCHEMATA
+            FROM {database_name}.INFORMATION_SCHEMA.SCHEMATA
             WHERE CATALOG_NAME = '{database_name}'
             AND SCHEMA_NAME <> 'INFORMATION_SCHEMA';
 
@@ -216,7 +216,7 @@ def get_tables_list(database_name: str, **context):
         # Get all tables in the database
         cursor.execute(f"""
             SELECT TABLE_SCHEMA, TABLE_NAME
-            FROM INFORMATION_SCHEMA.TABLES
+            FROM {database_name}.INFORMATION_SCHEMA.TABLES
             WHERE TABLE_CATALOG = '{database_name}'
             AND TABLE_TYPE = 'BASE TABLE'
             AND TABLE_SCHEMA <> 'INFORMATION_SCHEMA';
