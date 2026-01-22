@@ -18,7 +18,7 @@ from airflow.operators.empty import EmptyOperator
 
 # Default arguments
 default_args = {
-    'owner': 'airflow',
+    'owner': 'dataops',
     'depends_on_past': False,
     'start_date': datetime(2024, 1, 1),
     'email_on_failure': False,

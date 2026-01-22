@@ -18,7 +18,7 @@ import hashlib
 
 # Default args for the DAG
 default_args = {
-    'owner': 'data-team',
+    'owner': 'dataops',
     'depends_on_past': False,
     'email_on_failure': True,
     'email_on_retry': False,

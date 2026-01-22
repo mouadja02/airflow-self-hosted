@@ -16,7 +16,7 @@ from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 # Default arguments
 default_args = {
-    'owner': 'airflow',
+    'owner': 'dataops',
     'depends_on_past': False,
     'start_date': datetime(2024, 1, 1),
     'email_on_failure': False,
@@ -27,7 +27,7 @@ default_args = {
 
 # DAG definition
 dag = DAG(
-    'bitcoin_on_chain_trader_fixed',
+    'bitcoin_on_chain_trader',
     default_args=default_args,
     description='Calculate Bitcoin on-chain metrics for trading indicators - FIXED VERSION',
     schedule='5 23 * * *',  # Every day at 23:05

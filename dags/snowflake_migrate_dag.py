@@ -69,7 +69,7 @@ def send_telegram_failure_notification(context):
 
 # Default arguments
 default_args = {
-    'owner': 'mj',
+    'owner': 'dataops',
     'depends_on_past': False,
     'email_on_failure': False,
     'email_on_retry': False,

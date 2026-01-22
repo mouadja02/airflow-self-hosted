@@ -16,7 +16,7 @@ from functools import partial
 
 # Default arguments
 default_args = {
-    'owner': 'mouadja02',
+    'owner': 'dataops',
     'depends_on_past': False,
     'start_date': datetime(2024, 1, 1),
     'email_on_failure': True,
