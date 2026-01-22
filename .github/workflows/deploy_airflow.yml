@@ -104,6 +104,9 @@ jobs:
           echo "PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}" >> .env
           echo "PINECONE_INDEX_NAME=${{ secrets.PINECONE_INDEX_NAME }}" >> .env
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+          echo "GITHUB_TOKEN=${{ secrets.TOKEN }}" >> .env
+          echo "FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }}" >> .env
+          echo "CRYPTOCOMPARE_API_KEY=${{ secrets.CRYPTOCOMPARE_API_KEY }}" >> .env
 
       - name: Build and Start Containers
         run: |
@@ -267,6 +270,10 @@ jobs:
           echo "PINECONE_API_KEY=${{ secrets.PINECONE_API_KEY }}" >> .env
           echo "PINECONE_INDEX_NAME=${{ secrets.PINECONE_INDEX_NAME }}" >> .env
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+          echo "GITHUB_TOKEN=${{ secrets.TOKEN }}" >> .env
+          echo "FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }}" >> .env
+          echo "CRYPTOCOMPARE_API_KEY=${{ secrets.CRYPTOCOMPARE_API_KEY }}" >> .env
+          echo "FIRECRAWL_API_KEY=${{ secrets.FIRECRAWL_API_KEY }}" >> .env
 
           # Create deployment script
           cat <<'EOF' > deploy_script.sh

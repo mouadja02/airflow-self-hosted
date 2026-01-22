@@ -1,11 +1,9 @@
 # Docker Compose file for Apache Airflow deployment
 
 # Common configuration for Airflow services
-x-airflow-common:
-  &airflow-common
+x-airflow-common: &airflow-common
   build: .
-  environment:
-    &airflow-common-env
+  environment: &airflow-common-env
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__FERNET_KEY: ''
@@ -40,8 +38,12 @@ x-airflow-common:
     PINECONE_INDEX_NAME: ${PINECONE_INDEX_NAME}
     OPENAI_API_KEY: ${OPENAI_API_KEY}
     GITHUB_TOKEN: ${GITHUB_TOKEN}
+    FINNHUB_API_KEY: ${FINNHUB_API_KEY}
+    CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY}
+    FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY}
+
     # Next feature to be implemented
-    VAULT_URL: ${VAULT_URL} 
+    VAULT_URL: ${VAULT_URL}
     VAULT_TOKEN: ${VAULT_TOKEN}
   volumes:
     - ./config:/opt/airflow/config
@@ -53,11 +55,9 @@ x-airflow-common:
   user: "${AIRFLOW_UID:-1000}:0"
   networks:
     - airflow_network
-  depends_on:
-    &airflow-common-depends-on
+  depends_on: &airflow-common-depends-on
     postgres:
       condition: service_healthy
-
 
 # Define services
 services:
@@ -69,18 +69,13 @@ services:
       POSTGRES_DB: airflow
       POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
     command: >
-      postgres
-      -c shared_buffers=128MB
-      -c max_connections=50
-      -c work_mem=4MB
-      -c maintenance_work_mem=64MB
-      -c effective_cache_size=512MB
+      postgres -c shared_buffers=128MB -c max_connections=50 -c work_mem=4MB -c maintenance_work_mem=64MB -c effective_cache_size=512MB
     volumes:
       - ./docker/data/postgres:/var/lib/postgresql/data
     networks:
       - airflow_network
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: [ "CMD", "pg_isready", "-U", "airflow" ]
       interval: 10s
       retries: 5
       start_period: 5s
@@ -98,7 +93,7 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://0.0.0.0:8080/api/v2/version"]
+      test: [ "CMD", "curl", "--fail", "http://0.0.0.0:8080/api/v2/version" ]
       interval: 45s
       timeout: 30s
       retries: 10
@@ -120,7 +115,7 @@ services:
     <<: *airflow-common
     command: scheduler
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://0.0.0.0:8974/health"]
+      test: [ "CMD", "curl", "--fail", "http://0.0.0.0:8974/health" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -142,7 +137,7 @@ services:
     <<: *airflow-common
     command: dag-processor
     healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      test: [ "CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"' ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -241,7 +236,7 @@ services:
         echo "Files in shared volumes:"
         echo
         ls -la /opt/airflow/{logs,dags,plugins,config,migrations}
-        
+
     # yamllint enable rule:line-length
     environment:
       <<: *airflow-common-env
@@ -257,7 +252,7 @@ volumes:
   postgres_data:
   mlflow_data:
 
-# Define custom networks
+    # Define custom networks
 networks:
   airflow_network:
     driver: bridge
