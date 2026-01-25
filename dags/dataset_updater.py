@@ -808,6 +808,16 @@ for i in range(1, 5):
         dag=dags[i]
     )
 
+    create_stage = SnowflakeOperator(
+        task_id='create_stage',
+        snowflake_conn_id='snowflake_default',
+        sql="""
+        CREATE STAGE IF NOT EXISTS BITCOIN_DATA.DATA.my_stage
+        FILE_FORMAT = BITCOIN_DATA.DATA.json_format;
+        """,
+        dag=dags[i]
+    )
+
 # Create download and merge tasks for batches 1-4
 for batch_num in range(1, 5):
     prev_task = None
@@ -815,7 +825,7 @@ for batch_num in range(1, 5):
     
     # Start with file format
     format_task = [task for task in dag.tasks if task.task_id == 'create_file_format'][0]
-    prev_task = format_task
+    stage_task = [task for task in dag.tasks if task.task_id == 'create_stage'][0]
     
     # Create sequential download and merge for each metric
     for metric_name in batch_metrics[batch_num]:
@@ -832,7 +842,7 @@ for batch_num in range(1, 5):
         )
         
         # Chain: previous_task >> download >> merge
-        prev_task >> download_task >> merge_task
+        format_task >> stage_task >> download_task >> merge_task
         prev_task = merge_task
 
 
