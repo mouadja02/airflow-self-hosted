@@ -29,7 +29,7 @@ dag = DAG(
     'snowflake_docs_scraper',
     default_args=default_args,
     description='Scrape Snowflake documentation and update Pinecone (Delta mode)',
-    schedule='0 2 * * 0',  # Weekly on Sunday at 2 AM
+    schedule='0 2 * * 0',
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['snowflake', 'scraping', 'pinecone']
@@ -261,7 +261,7 @@ def update_pinecone(**context):
     
     # Initialize Pinecone
     pc = get_pinecone_client()
-    index_name = os.environ.get("PINECONE_INDEX_NAME", "snowflake-docs")
+    index_name = os.environ.get("PINECONE_SF_INDEX_NAME", "snowflake-docs")
     
     # Check if index exists, create if not
     if index_name not in pc.list_indexes().names():

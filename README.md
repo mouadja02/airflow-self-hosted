@@ -48,7 +48,14 @@ This Airflow infrastructure serves various personal data engineering projects:
    - Vector embeddings with OpenAI for semantic search
    - Pinecone vector database for RAG applications
 
-3. **Future Projects** (Examples)
+3. **AWS SAA Documentation Scraper** (Knowledge Base)
+   - Scrapes AWS SAA documentation for SnowPro Core exam prep
+   - Delta-mode scraping (only new/updated pages)
+   - Parallel web scraping with rate limiting
+   - Vector embeddings with OpenAI for semantic search
+   - Pinecone vector database for RAG applications
+
+4. **Future Projects** (Examples)
    - ETL pipelines for personal analytics
    - Social media data aggregation
    - IoT sensor data processing
@@ -61,6 +68,7 @@ The repository includes production-ready example DAGs:
 - **`bitcoin_ohlcv_dataset.py`**: Bitcoin price data collection with historical backfill
 - **`technical_indicators_dag.py`**: Technical analysis calculations
 - **`snowflake_docs_db_dag.py`**: Documentation scraper with vector embeddings
+- **`aws_saa_docs_scraper.py`**: AWS documentation scraper for SAA certification with vector embeddings
 
 These DAGs demonstrate best practices and can be used as templates for your own projects.
 
@@ -74,6 +82,7 @@ airflow-self-hosted/
 │   ├── bitcoin_ohlcv_dataset.py     # Bitcoin price data with backfill
 │   ├── technical_indicators_dag.py  # Technical analysis calculations
 │   ├── snowflake_docs_db_dag.py     # Documentation scraper + RAG
+│   └── aws_saa_docs_scraper.py      # AWS SAA documentation scraper + RAG
 │   └── your_custom_dag.py           # Add your own DAGs here
 ├── config/
 │   └── airflow.cfg               # Airflow configuration
@@ -152,14 +161,16 @@ SNOWFLAKE_DATABASE=your_database
 SNOWFLAKE_SCHEMA=your_schema
 SNOWFLAKE_ROLE=your_role
 
-# Optional: Telegram Notifications
+# Telegram Notifications
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 
-# Optional: OpenAI & Pinecone (for documentation scraper)
+# OpenAI & Pinecone (for documentation scraper)
 OPENAI_API_KEY=your_openai_api_key
 PINECONE_API_KEY=your_pinecone_api_key
-PINECONE_INDEX_NAME=snowflake-docs
+PINECONE_SF_INDEX_NAME=your_pinecone_sf_index_name
+PINECONE_AWS_INDEX_NAME=your_pinecone_aws_index_name
+
 ```
 
 ### 3. Start Airflow Locally
@@ -759,16 +770,6 @@ This project is licensed under the MIT License - feel free to use it for your pe
 
 ---
 
-## ✉️ Support
-
-For issues and questions:
-- Open an issue on GitHub
-- Check troubleshooting section above
-- Review Airflow documentation
-- Join Airflow Slack community
-
----
-
 ## 🎉 Acknowledgments
 
 - Apache Airflow community for excellent orchestration platform
@@ -783,5 +784,5 @@ For issues and questions:
 **Primary Use**: Personal data pipeline orchestration  
 **Example Projects**: Trading agent, web scraping, IoT, analytics  
 **Status**: Production Ready ✅  
-**Last Updated**: January 5, 2026  
-**Version**: 1.0.0
+**Last Updated**: February 2, 2026  
+**Version**: 1.1.0
