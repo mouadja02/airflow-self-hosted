@@ -36,7 +36,7 @@ dag = DAG(
     'aws_saa_docs_scraper',
     default_args=default_args,
     description='Scrape AWS documentation for SAA-C03 certification and update Pinecone (Delta mode)',
-    schedule='0 3 * * 0',  # Weekly on Sunday at 3 AM
+    schedule='0 */2 * * *',  # Evey 2 hours to initialize (then change to weekly)
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=['aws', 'saa', 'scraping', 'pinecone', 'certification']
@@ -361,7 +361,7 @@ def compute_delta_urls(**context):
     print(f"Previously scraped: {len(scraped_metadata)} URLs")
     
     # Limit batch size to avoid overwhelming the system
-    MAX_URLS_PER_RUN = 500
+    MAX_URLS_PER_RUN = 1000
     if len(new_urls) > MAX_URLS_PER_RUN:
         print(f"Limiting to {MAX_URLS_PER_RUN} URLs per run")
         new_urls = new_urls[:MAX_URLS_PER_RUN]
