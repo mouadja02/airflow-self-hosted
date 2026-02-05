@@ -36,8 +36,8 @@ dag = DAG(
     'aws_saa_docs_scraper',
     default_args=default_args,
     description='Scrape AWS documentation for SAA-C03 certification and update Pinecone (Delta mode)',
-    schedule='0 */2 * * *',  # Evey 2 hours to initialize (then change to weekly)
-    start_date=datetime(2025, 1, 1),
+    schedule='0 3 * * 0',  # Evey sunday night
+    start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=['aws', 'saa', 'scraping', 'pinecone', 'certification']
 )
