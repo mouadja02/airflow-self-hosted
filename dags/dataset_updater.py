@@ -18,11 +18,10 @@ from functools import partial
 default_args = {
     'owner': 'dataops',
     'depends_on_past': False,
-    'start_date': datetime(2024, 1, 1),
-    'email_on_failure': True,
+    'start_date': datetime(2026, 1, 1),
+    'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=10),
+    'retries': 0,
     'catchup': False,
     'execution_timeout': timedelta(minutes=60),
 }
@@ -275,23 +274,23 @@ def get_metrics_config(metric_name):
             '''
         },
         'long_term_hodler_supply': {
-            'api_url': 'https://bitcoin-data.com/v1/long-term-hodler-supply',
+            'api_url': 'https://bitcoin-data.com/v1/long-term-hodler-supply-btc',
             'table_name': 'LONG_TERM_HODLER_SUPPLY',
             'columns': '(date, unix_ts, lth_supply)',
             'select_clause': '''
                 TO_DATE($1:d::STRING, 'YYYY-MM-DD') as date,
                 $1:unixTs::BIGINT as unix_ts,
-                $1:longTermHodlerSupply::FLOAT as lth_supply
+                $1:longTermHodlerSupplyBtc::FLOAT as lth_supply
             '''
         },
         'short_term_hodler_supply': {
-            'api_url': 'https://bitcoin-data.com/v1/short-term-hodler-supply',
+            'api_url': 'https://bitcoin-data.com/v1/short-term-hodler-supply-btc',
             'table_name': 'SHORT_TERM_HODLER_SUPPLY',
             'columns': '(date, unix_ts, sth_supply)',
             'select_clause': '''
                 TO_DATE($1:d::STRING, 'YYYY-MM-DD') as date,
                 $1:unixTs::BIGINT as unix_ts,
-                $1:shortTermHodlerSupply::FLOAT as sth_supply
+                $1:shortTermHodlerSupplyBtc::FLOAT as sth_supply
             '''
         },
         'realized_price': {
