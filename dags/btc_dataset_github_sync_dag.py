@@ -68,8 +68,8 @@ def export_data_from_snowflake(**context):
         ohlcv_query = f"""
         SELECT 
             UNIX_TIMESTAMP,
-            TO_VARCHAR(DATETIME, 'YYYY-MM-DD HH24:MI:SS') AS DATETIME,
-            OPEN, HIGH, CLOSE, LOW, VOLUME_USD AS VOLUME
+            TO_TIMESTAMP_NTZ(UNIX_TIMESTAMP) AS DATETIME,
+            OPEN, HIGH, CLOSE, LOW, VOLUME_USD, VOLUME_BTC
         FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_OHLCV_TABLE']}
         ORDER BY UNIX_TIMESTAMP ASC;
         """
