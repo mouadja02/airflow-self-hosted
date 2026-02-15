@@ -41,7 +41,9 @@ def get_config(**context):
         'SNOWFLAKE_DATABASE': os.getenv('SNOWFLAKE_DATABASE', 'BITCOIN_DATA'),
         'SNOWFLAKE_SCHEMA': 'DATA', 
         'SNOWFLAKE_TABLE': 'HOURLY_TA',
-        'LOCAL_FILE_PATH': '/tmp/bitcoin-hourly-technical-indicators.csv',
+        'SNOWFLAKE_OHLCV_TABLE': 'BTC_HOURLY_DATA',
+        'LOCAL_FILE_PATH_WITH_INDICATORS': '/tmp/bitcoin-hourly-technical-indicators.csv',
+        'LOCAL_FILE_PATH_OHLCV_ONLY': '/tmp/bitcoin-hourly-ohlcv.csv',
         'CHUNK_SIZE': 10000,
         'TELEGRAM_BOT_TOKEN': os.getenv('TELEGRAM_BOT_TOKEN'),
         'TELEGRAM_CHAT_ID': os.getenv('TELEGRAM_CHAT_ID'),
@@ -60,7 +62,37 @@ def export_data_from_snowflake(**context):
         config = context['task_instance'].xcom_pull(task_ids='get_config')
         hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
         
-        print("📊 Step 1: Counting total records...")
+        # ========== EXPORT 1: OHLCV ONLY (Raw Data) ==========
+        print("📊 Step 1a: Exporting raw OHLCV data...")
+        
+        ohlcv_query = f"""
+        SELECT 
+            UNIX_TIMESTAMP,
+            TO_VARCHAR(DATETIME, 'YYYY-MM-DD HH24:MI:SS') AS DATETIME,
+            OPEN, HIGH, CLOSE, LOW, VOLUME_USD AS VOLUME
+        FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_OHLCV_TABLE']}
+        ORDER BY UNIX_TIMESTAMP ASC;
+        """
+        
+        df_ohlcv = hook.get_pandas_df(ohlcv_query)
+        print(f"✅ Fetched {len(df_ohlcv):,} OHLCV rows")
+        
+        # Write OHLCV-only CSV
+        print(f"💾 Writing OHLCV CSV file to {config['LOCAL_FILE_PATH_OHLCV_ONLY']}...")
+        df_ohlcv.to_csv(
+            config['LOCAL_FILE_PATH_OHLCV_ONLY'],
+            index=False,
+            encoding='utf-8',
+            float_format='%.8f',
+            chunksize=config['CHUNK_SIZE']
+        )
+        
+        ohlcv_file_size = os.path.getsize(config['LOCAL_FILE_PATH_OHLCV_ONLY'])
+        ohlcv_file_size_mb = ohlcv_file_size / (1024 * 1024)
+        print(f"✅ OHLCV CSV file created: {ohlcv_file_size_mb:.2f} MB")
+        
+        # ========== EXPORT 2: OHLCV + Technical Indicators ==========
+        print("\n📊 Step 1b: Counting total records with technical indicators...")
         
         # Get total count
         count_sql = f"SELECT COUNT(*) FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_TABLE']};"
@@ -69,9 +101,9 @@ def export_data_from_snowflake(**context):
         
         print(f"📈 Total records to export: {total_records:,}")
         
-        print(f"💾 Step 2: Exporting data in chunks of {config['CHUNK_SIZE']:,} rows...")
+        print(f"💾 Step 2: Exporting data with technical indicators in chunks of {config['CHUNK_SIZE']:,} rows...")
         
-        # Query to fetch data
+        # Query to fetch data with technical indicators
         query = f"""
         SELECT 
             UNIX_TIMESTAMP,
@@ -118,15 +150,15 @@ def export_data_from_snowflake(**context):
         """
         
         # Get pandas DataFrame
-        df = hook.get_pandas_df(query)
+        df_indicators = hook.get_pandas_df(query)
         
-        print(f"✅ Fetched {len(df):,} rows")
+        print(f"✅ Fetched {len(df_indicators):,} rows with indicators")
         
-        # Write to CSV
-        print(f"💾 Writing CSV file to {config['LOCAL_FILE_PATH']}...")
+        # Write to CSV with indicators
+        print(f"💾 Writing Technical Indicators CSV file to {config['LOCAL_FILE_PATH_WITH_INDICATORS']}...")
         
-        df.to_csv(
-            config['LOCAL_FILE_PATH'],
+        df_indicators.to_csv(
+            config['LOCAL_FILE_PATH_WITH_INDICATORS'],
             index=False,
             encoding='utf-8',
             float_format='%.8f',
@@ -134,20 +166,24 @@ def export_data_from_snowflake(**context):
         )
         
         # Get file size
-        file_size = os.path.getsize(config['LOCAL_FILE_PATH'])
-        file_size_mb = file_size / (1024 * 1024)
+        indicators_file_size = os.path.getsize(config['LOCAL_FILE_PATH_WITH_INDICATORS'])
+        indicators_file_size_mb = indicators_file_size / (1024 * 1024)
         
-        print(f"✅ CSV file created: {file_size_mb:.2f} MB")
+        print(f"✅ Technical Indicators CSV file created: {indicators_file_size_mb:.2f} MB")
         
-        # Clean up DataFrame from memory
-        del df
+        # Clean up DataFrames from memory
+        del df_ohlcv
+        del df_indicators
         
         return {
             'record_count': total_records,
-            'exported_count': len(df) if 'df' in locals() else total_records,
+            'ohlcv_record_count': len(df_ohlcv) if 'df_ohlcv' in locals() else 0,
+            'exported_count': len(df_indicators) if 'df_indicators' in locals() else total_records,
             'column_count': 92,
-            'file_path': config['LOCAL_FILE_PATH'],
-            'file_size_mb': file_size_mb,
+            'ohlcv_file_path': config['LOCAL_FILE_PATH_OHLCV_ONLY'],
+            'indicators_file_path': config['LOCAL_FILE_PATH_WITH_INDICATORS'],
+            'ohlcv_file_size_mb': ohlcv_file_size_mb,
+            'indicators_file_size_mb': indicators_file_size_mb,
             'success': True
         }
         
@@ -156,7 +192,7 @@ def export_data_from_snowflake(**context):
         raise AirflowException(f"Data export failed: {str(e)}")
 
 def upload_to_github_with_lfs(**context):
-    """Upload large CSV file to GitHub using Git LFS"""
+    """Upload large CSV files to GitHub using Git LFS"""
     try:
         config = context['task_instance'].xcom_pull(task_ids='get_config')
         export_info = context['task_instance'].xcom_pull(task_ids='export_data')
@@ -164,7 +200,9 @@ def upload_to_github_with_lfs(**context):
         if not export_info or not export_info.get('success'):
             raise AirflowException("No valid data to upload")
         
-        print(f"📤 Uploading file: {export_info['file_path']} ({export_info['file_size_mb']:.2f} MB)")
+        print(f"📤 Uploading files:")
+        print(f"  - OHLCV: {export_info['ohlcv_file_path']} ({export_info['ohlcv_file_size_mb']:.2f} MB)")
+        print(f"  - With Indicators: {export_info['indicators_file_path']} ({export_info['indicators_file_size_mb']:.2f} MB)")
         
         # Create temporary directory for git operations
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -199,15 +237,44 @@ def upload_to_github_with_lfs(**context):
             if os.path.exists(gitattributes_path):
                 subprocess.run(['git', 'add', '.gitattributes'], cwd=tmp_dir, check=False)
             
-            # Copy CSV file to repo
-            filename = 'bitcoin-hourly-technical-indicators.csv'
-            dest_path = os.path.join(tmp_dir, filename)
-            print(f"📋 Copying file to repository...")
-            shutil.copy2(export_info['file_path'], dest_path)
+            # Copy both CSV files to repo
+            ohlcv_filename = 'bitcoin-hourly-ohlcv.csv'
+            indicators_filename = 'bitcoin-hourly-technical-indicators.csv'
+            docs_filename = 'TECHNICAL_INDICATORS_CALCULATION.md'
+            script_filename = 'calculate_technical_indicators.py'
             
-            # Add file to git
-            print("➕ Adding file to git...")
-            subprocess.run(['git', 'add', filename], cwd=tmp_dir, check=True)
+            ohlcv_dest_path = os.path.join(tmp_dir, ohlcv_filename)
+            indicators_dest_path = os.path.join(tmp_dir, indicators_filename)
+            docs_dest_path = os.path.join(tmp_dir, docs_filename)
+            script_dest_path = os.path.join(tmp_dir, script_filename)
+            
+            # Get the file paths (they're in the parent directory of dags)
+            base_dir = os.path.dirname(os.path.dirname(__file__))
+            docs_source_path = os.path.join(base_dir, docs_filename)
+            script_source_path = os.path.join(base_dir, script_filename)
+            
+            print(f"📋 Copying files to repository...")
+            shutil.copy2(export_info['ohlcv_file_path'], ohlcv_dest_path)
+            shutil.copy2(export_info['indicators_file_path'], indicators_dest_path)
+            
+            # Copy documentation if it exists
+            if os.path.exists(docs_source_path):
+                shutil.copy2(docs_source_path, docs_dest_path)
+                print(f"📄 Copied documentation file")
+            
+            # Copy Python script if it exists
+            if os.path.exists(script_source_path):
+                shutil.copy2(script_source_path, script_dest_path)
+                print(f"🐍 Copied Python calculation script")
+            
+            # Add files to git
+            print("➕ Adding files to git...")
+            subprocess.run(['git', 'add', ohlcv_filename], cwd=tmp_dir, check=True)
+            subprocess.run(['git', 'add', indicators_filename], cwd=tmp_dir, check=True)
+            if os.path.exists(docs_dest_path):
+                subprocess.run(['git', 'add', docs_filename], cwd=tmp_dir, check=True)
+            if os.path.exists(script_dest_path):
+                subprocess.run(['git', 'add', script_filename], cwd=tmp_dir, check=True)
             
             # Check if there are changes to commit
             print("🔍 Checking for changes...")
@@ -220,25 +287,31 @@ def upload_to_github_with_lfs(**context):
             )
             
             if not status_result.stdout.strip():
-                print("ℹ️ No changes detected - file is identical to existing version")
+                print("ℹ️ No changes detected - files are identical to existing versions")
                 print("✅ Repository is already up to date")
                 
                 return {
                     'success': True,
-                    'commit_message': 'No changes - file already up to date',
-                    'file_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{filename}",
+                    'commit_message': 'No changes - files already up to date',
+                    'ohlcv_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}",
+                    'indicators_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{indicators_filename}",
                     'skipped': True
                 }
             
             # Create commit message
             now = datetime.now()
             date_str = now.strftime('%Y-%m-%d')
-            commit_message = f"""📊 Daily Update: Bitcoin Technical Indicators Dataset
+            commit_message = f"""📊 Daily Update: Bitcoin Dataset
 
 📅 Date: {date_str}
 📈 Records: {export_info['record_count']:,}
-💾 Size: {export_info['file_size_mb']:.2f} MB
-🔍 {export_info['column_count']} Technical Indicators + OHLCV
+
+📦 Files Updated:
+  • bitcoin-hourly-ohlcv.csv ({export_info['ohlcv_file_size_mb']:.2f} MB)
+    - Raw OHLCV data (UNIX_TIMESTAMP, DATETIME, OPEN, HIGH, CLOSE, LOW, VOLUME)
+  
+  • bitcoin-hourly-technical-indicators.csv ({export_info['indicators_file_size_mb']:.2f} MB)
+    - OHLCV + {export_info['column_count']} Technical Indicators
 
 Automated update via Airflow"""
             
@@ -255,18 +328,22 @@ Automated update via Airflow"""
                 check=True
             )
             
-            print("✅ Successfully uploaded to GitHub with LFS!")
-            print(f"🔗 URL: https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{filename}")
+            print("✅ Successfully uploaded both files to GitHub with LFS!")
+            print(f"🔗 OHLCV: https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}")
+            print(f"🔗 With Indicators: https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{indicators_filename}")
         
-        # Cleanup local file
-        if os.path.exists(export_info['file_path']):
-            os.remove(export_info['file_path'])
-            print("🧹 Cleaned up local file")
+        # Cleanup local files
+        if os.path.exists(export_info['ohlcv_file_path']):
+            os.remove(export_info['ohlcv_file_path'])
+        if os.path.exists(export_info['indicators_file_path']):
+            os.remove(export_info['indicators_file_path'])
+        print("🧹 Cleaned up local files")
         
         return {
             'success': True,
             'commit_message': commit_message,
-            'file_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{filename}",
+            'ohlcv_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}",
+            'indicators_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{indicators_filename}",
             'skipped': False
         }
         
@@ -297,22 +374,30 @@ def send_telegram_notification(**context):
 
 📅 *Date*: {date_str}
 📈 *Records*: {export_info['record_count']:,}
-💾 *File Size*: {export_info['file_size_mb']:.2f} MB
+💾 *Total Size*: {export_info['ohlcv_file_size_mb'] + export_info['indicators_file_size_mb']:.2f} MB
 ✅ *Status*: Already up-to-date
 
-🔗 [View on GitHub]({upload_info['file_url']})
+📦 *Files*:
+  • [OHLCV Only]({upload_info['ohlcv_url']})
+  • [With Indicators]({upload_info['indicators_url']})
 
 _Automated by Airflow DAG_"""
         else:
-            message = f"""✅ *Bitcoin Technical Indicators Dataset Updated*
+            message = f"""✅ *Bitcoin Dataset Updated*
 
 📅 *Date*: {date_str}
 📈 *Records*: {export_info['record_count']:,}
-💾 *File Size*: {export_info['file_size_mb']:.2f} MB
-🔍 *Indicators*: {export_info['column_count']} Technical Indicators
-📦 *Storage*: Git LFS
 
-🔗 [View on GitHub]({upload_info['file_url']})
+📦 *Files Updated*:
+  • *OHLCV Only* ({export_info['ohlcv_file_size_mb']:.2f} MB)
+    [View on GitHub]({upload_info['ohlcv_url']})
+    Raw OHLCV data without indicators
+  
+  • *With Technical Indicators* ({export_info['indicators_file_size_mb']:.2f} MB)
+    [View on GitHub]({upload_info['indicators_url']})
+    OHLCV + {export_info['column_count']} indicators
+
+📦 *Storage*: Git LFS
 
 _Automated by Airflow DAG_"""
         
