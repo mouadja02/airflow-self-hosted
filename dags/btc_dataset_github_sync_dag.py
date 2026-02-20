@@ -28,6 +28,7 @@ dag = DAG(
     description='Daily refresh of Bitcoin OHLCV with 90+ Technical Indicators to GitHub',
     schedule='30 0 * * *',  # Daily at 00:30 UTC
     catchup=False,
+    max_active_runs=1,
     tags=['bitcoin', 'technical-indicators', 'dataset', 'github'],
 )
 
@@ -39,7 +40,7 @@ def get_config(**context):
         'GITHUB_TOKEN': os.getenv('GITHUB_TOKEN'),
         'GITHUB_EMAIL': 'mouadpro02@gmail.com',
         'SNOWFLAKE_DATABASE': os.getenv('SNOWFLAKE_DATABASE', 'BITCOIN_DATA'),
-        'SNOWFLAKE_SCHEMA': 'DATA', 
+        'SNOWFLAKE_SCHEMA': 'DATA',
         'SNOWFLAKE_TABLE': 'HOURLY_TA',
         'SNOWFLAKE_OHLCV_TABLE': 'BTC_HOURLY_DATA',
         'LOCAL_FILE_PATH_WITH_INDICATORS': '/tmp/bitcoin-hourly-technical-indicators.csv',
@@ -48,36 +49,37 @@ def get_config(**context):
         'TELEGRAM_BOT_TOKEN': os.getenv('TELEGRAM_BOT_TOKEN'),
         'TELEGRAM_CHAT_ID': os.getenv('TELEGRAM_CHAT_ID'),
     }
-    
+
     # Validate required configs
     if not config['GITHUB_TOKEN']:
         raise AirflowException("GITHUB_TOKEN is required but not set")
-    
+
     print("✅ Configuration loaded successfully")
     return config
+
 
 def export_data_from_snowflake(**context):
     """Export data from Snowflake to CSV using chunked processing"""
     try:
         config = context['task_instance'].xcom_pull(task_ids='get_config')
         hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
-        
+
         # ========== EXPORT 1: OHLCV ONLY (Raw Data) ==========
         print("📊 Step 1a: Exporting raw OHLCV data...")
-        
+
         ohlcv_query = f"""
-        SELECT 
+        SELECT
             UNIX_TIMESTAMP,
             TO_TIMESTAMP_NTZ(UNIX_TIMESTAMP) AS DATETIME,
             OPEN, HIGH, CLOSE, LOW, VOLUME_USD, VOLUME_BTC
         FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_OHLCV_TABLE']}
         ORDER BY UNIX_TIMESTAMP ASC;
         """
-        
+
         df_ohlcv = hook.get_pandas_df(ohlcv_query)
-        print(f"✅ Fetched {len(df_ohlcv):,} OHLCV rows")
-        
-        # Write OHLCV-only CSV
+        ohlcv_record_count = len(df_ohlcv)
+        print(f"✅ Fetched {ohlcv_record_count:,} OHLCV rows")
+
         print(f"💾 Writing OHLCV CSV file to {config['LOCAL_FILE_PATH_OHLCV_ONLY']}...")
         df_ohlcv.to_csv(
             config['LOCAL_FILE_PATH_OHLCV_ONLY'],
@@ -86,26 +88,23 @@ def export_data_from_snowflake(**context):
             float_format='%.8f',
             chunksize=config['CHUNK_SIZE']
         )
-        
-        ohlcv_file_size = os.path.getsize(config['LOCAL_FILE_PATH_OHLCV_ONLY'])
-        ohlcv_file_size_mb = ohlcv_file_size / (1024 * 1024)
+        del df_ohlcv  # Free memory immediately after writing
+
+        ohlcv_file_size_mb = os.path.getsize(config['LOCAL_FILE_PATH_OHLCV_ONLY']) / (1024 * 1024)
         print(f"✅ OHLCV CSV file created: {ohlcv_file_size_mb:.2f} MB")
-        
+
         # ========== EXPORT 2: OHLCV + Technical Indicators ==========
         print("\n📊 Step 1b: Counting total records with technical indicators...")
-        
-        # Get total count
+
         count_sql = f"SELECT COUNT(*) FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_TABLE']};"
         result = hook.get_first(count_sql)
         total_records = result[0] if result else 0
-        
         print(f"📈 Total records to export: {total_records:,}")
-        
+
         print(f"💾 Step 2: Exporting data with technical indicators in chunks of {config['CHUNK_SIZE']:,} rows...")
-        
-        # Query to fetch data with technical indicators
+
         query = f"""
-        SELECT 
+        SELECT
             UNIX_TIMESTAMP,
             TO_VARCHAR(DATETIME, 'YYYY-MM-DD HH24:MI:SS') AS DATETIME,
             OPEN, HIGH, CLOSE, LOW, VOLUME,
@@ -148,15 +147,12 @@ def export_data_from_snowflake(**context):
         FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_TABLE']}
         ORDER BY UNIX_TIMESTAMP ASC;
         """
-        
-        # Get pandas DataFrame
+
         df_indicators = hook.get_pandas_df(query)
-        
-        print(f"✅ Fetched {len(df_indicators):,} rows with indicators")
-        
-        # Write to CSV with indicators
+        indicators_record_count = len(df_indicators)
+        print(f"✅ Fetched {indicators_record_count:,} rows with indicators")
+
         print(f"💾 Writing Technical Indicators CSV file to {config['LOCAL_FILE_PATH_WITH_INDICATORS']}...")
-        
         df_indicators.to_csv(
             config['LOCAL_FILE_PATH_WITH_INDICATORS'],
             index=False,
@@ -164,21 +160,15 @@ def export_data_from_snowflake(**context):
             float_format='%.8f',
             chunksize=config['CHUNK_SIZE']
         )
-        
-        # Get file size
-        indicators_file_size = os.path.getsize(config['LOCAL_FILE_PATH_WITH_INDICATORS'])
-        indicators_file_size_mb = indicators_file_size / (1024 * 1024)
-        
+        del df_indicators  # Free memory immediately after writing
+
+        indicators_file_size_mb = os.path.getsize(config['LOCAL_FILE_PATH_WITH_INDICATORS']) / (1024 * 1024)
         print(f"✅ Technical Indicators CSV file created: {indicators_file_size_mb:.2f} MB")
-        
-        # Clean up DataFrames from memory
-        del df_ohlcv
-        del df_indicators
-        
+
         return {
             'record_count': total_records,
-            'ohlcv_record_count': len(df_ohlcv) if 'df_ohlcv' in locals() else 0,
-            'exported_count': len(df_indicators) if 'df_indicators' in locals() else total_records,
+            'ohlcv_record_count': ohlcv_record_count,
+            'exported_count': indicators_record_count,
             'column_count': 92,
             'ohlcv_file_path': config['LOCAL_FILE_PATH_OHLCV_ONLY'],
             'indicators_file_path': config['LOCAL_FILE_PATH_WITH_INDICATORS'],
@@ -186,121 +176,130 @@ def export_data_from_snowflake(**context):
             'indicators_file_size_mb': indicators_file_size_mb,
             'success': True
         }
-        
+
     except Exception as e:
         print(f"❌ Error exporting data: {str(e)}")
         raise AirflowException(f"Data export failed: {str(e)}")
 
+
+def _run_git(cmd, cwd=None, env=None, capture=True):
+    """Helper to run git commands with consistent error handling"""
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=env,
+        capture_output=capture,
+        text=True,
+    )
+    if result.returncode != 0:
+        output = result.stderr or result.stdout or ""
+        raise subprocess.CalledProcessError(result.returncode, cmd, output=output)
+    return result
+
+
 def upload_to_github_with_lfs(**context):
-    """Upload large CSV files to GitHub using Git LFS"""
+    """Upload large CSV files to GitHub using Git LFS.
+
+    Key fix: GIT_LFS_SKIP_SMUDGE=1 during clone so LFS objects are NOT
+    downloaded (only pointers), eliminating bandwidth consumption and the
+    'LFS budget exceeded' error on clone.  We only push new content, we
+    never need to download the old blobs.
+    """
     try:
         config = context['task_instance'].xcom_pull(task_ids='get_config')
         export_info = context['task_instance'].xcom_pull(task_ids='export_data')
-        
+
         if not export_info or not export_info.get('success'):
             raise AirflowException("No valid data to upload")
-        
+
         print(f"📤 Uploading files:")
         print(f"  - OHLCV: {export_info['ohlcv_file_path']} ({export_info['ohlcv_file_size_mb']:.2f} MB)")
         print(f"  - With Indicators: {export_info['indicators_file_path']} ({export_info['indicators_file_size_mb']:.2f} MB)")
-        
-        # Create temporary directory for git operations
+
+        # Build env with LFS smudge disabled so clone never downloads LFS blobs
+        git_env = os.environ.copy()
+        git_env["GIT_LFS_SKIP_SMUDGE"] = "1"
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             print(f"📁 Working directory: {tmp_dir}")
-            
-            repo_url = f"https://{config['GITHUB_TOKEN']}@github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}.git"
-            
-            # Clone repository
-            print("📥 Cloning repository...")
-            subprocess.run(
-                ['git', 'clone', repo_url, tmp_dir],
-                check=True,
-                capture_output=True,
-                text=True
+
+            repo_url = (
+                f"https://{config['GITHUB_TOKEN']}@github.com"
+                f"/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}.git"
             )
-            
-            # Configure git
+
+            # Clone — pointers only, no LFS download
+            print("📥 Cloning repository (LFS smudge disabled — pointers only)...")
+            _run_git(['git', 'clone', repo_url, tmp_dir], env=git_env)
+
+            # Configure git identity
             print("🔧 Configuring git...")
-            subprocess.run(['git', 'config', 'user.name', config['GITHUB_USERNAME']], cwd=tmp_dir, check=True)
-            subprocess.run(['git', 'config', 'user.email', config['GITHUB_EMAIL']], cwd=tmp_dir, check=True)
-            
-            # Initialize Git LFS
+            _run_git(['git', 'config', 'user.name', config['GITHUB_USERNAME']], cwd=tmp_dir)
+            _run_git(['git', 'config', 'user.email', config['GITHUB_EMAIL']], cwd=tmp_dir)
+
+            # Initialize Git LFS and track CSVs
             print("🔧 Initializing Git LFS...")
-            subprocess.run(['git', 'lfs', 'install'], cwd=tmp_dir, check=True)
-            
-            # Track CSV files with LFS
-            print("📝 Configuring LFS tracking...")
-            subprocess.run(['git', 'lfs', 'track', '*.csv'], cwd=tmp_dir, check=True)
-            
-            # Add .gitattributes if it was created/modified
+            _run_git(['git', 'lfs', 'install'], cwd=tmp_dir)
+
+            print("📝 Configuring LFS tracking for *.csv...")
+            _run_git(['git', 'lfs', 'track', '*.csv'], cwd=tmp_dir)
+
             gitattributes_path = os.path.join(tmp_dir, '.gitattributes')
             if os.path.exists(gitattributes_path):
-                subprocess.run(['git', 'add', '.gitattributes'], cwd=tmp_dir, check=False)
-            
-            # Copy both CSV files to repo
+                _run_git(['git', 'add', '.gitattributes'], cwd=tmp_dir)
+
+            # File names
             ohlcv_filename = 'bitcoin-hourly-ohlcv.csv'
             indicators_filename = 'bitcoin-hourly-technical-indicators.csv'
             docs_filename = 'TECHNICAL_INDICATORS_CALCULATION.md'
             script_filename = 'calculate_technical_indicators.py'
-            
-            ohlcv_dest_path = os.path.join(tmp_dir, ohlcv_filename)
-            indicators_dest_path = os.path.join(tmp_dir, indicators_filename)
-            docs_dest_path = os.path.join(tmp_dir, docs_filename)
-            script_dest_path = os.path.join(tmp_dir, script_filename)
-            
-            # Get the file paths (they're in the parent directory of dags)
+
+            ohlcv_dest = os.path.join(tmp_dir, ohlcv_filename)
+            indicators_dest = os.path.join(tmp_dir, indicators_filename)
+            docs_dest = os.path.join(tmp_dir, docs_filename)
+            script_dest = os.path.join(tmp_dir, script_filename)
+
             base_dir = os.path.dirname(os.path.dirname(__file__))
-            docs_source_path = os.path.join(base_dir, docs_filename)
-            script_source_path = os.path.join(base_dir, script_filename)
-            
-            print(f"📋 Copying files to repository...")
-            shutil.copy2(export_info['ohlcv_file_path'], ohlcv_dest_path)
-            shutil.copy2(export_info['indicators_file_path'], indicators_dest_path)
-            
-            # Copy documentation if it exists
-            if os.path.exists(docs_source_path):
-                shutil.copy2(docs_source_path, docs_dest_path)
-                print(f"📄 Copied documentation file")
-            
-            # Copy Python script if it exists
-            if os.path.exists(script_source_path):
-                shutil.copy2(script_source_path, script_dest_path)
-                print(f"🐍 Copied Python calculation script")
-            
-            # Add files to git
+            docs_src = os.path.join(base_dir, docs_filename)
+            script_src = os.path.join(base_dir, script_filename)
+
+            print("📋 Copying files to repository...")
+            shutil.copy2(export_info['ohlcv_file_path'], ohlcv_dest)
+            shutil.copy2(export_info['indicators_file_path'], indicators_dest)
+
+            if os.path.exists(docs_src):
+                shutil.copy2(docs_src, docs_dest)
+                print("📄 Copied documentation file")
+
+            if os.path.exists(script_src):
+                shutil.copy2(script_src, script_dest)
+                print("🐍 Copied Python calculation script")
+
+            # Stage files
             print("➕ Adding files to git...")
-            subprocess.run(['git', 'add', ohlcv_filename], cwd=tmp_dir, check=True)
-            subprocess.run(['git', 'add', indicators_filename], cwd=tmp_dir, check=True)
-            if os.path.exists(docs_dest_path):
-                subprocess.run(['git', 'add', docs_filename], cwd=tmp_dir, check=True)
-            if os.path.exists(script_dest_path):
-                subprocess.run(['git', 'add', script_filename], cwd=tmp_dir, check=True)
-            
-            # Check if there are changes to commit
+            _run_git(['git', 'add', ohlcv_filename], cwd=tmp_dir)
+            _run_git(['git', 'add', indicators_filename], cwd=tmp_dir)
+            if os.path.exists(docs_dest):
+                _run_git(['git', 'add', docs_filename], cwd=tmp_dir)
+            if os.path.exists(script_dest):
+                _run_git(['git', 'add', script_filename], cwd=tmp_dir)
+
+            # Check for changes
             print("🔍 Checking for changes...")
-            status_result = subprocess.run(
-                ['git', 'status', '--porcelain'],
-                cwd=tmp_dir,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
-            if not status_result.stdout.strip():
-                print("ℹ️ No changes detected - files are identical to existing versions")
-                print("✅ Repository is already up to date")
-                
+            status = _run_git(['git', 'status', '--porcelain'], cwd=tmp_dir)
+
+            if not status.stdout.strip():
+                print("ℹ️ No changes detected — repository is already up to date")
                 return {
                     'success': True,
                     'commit_message': 'No changes - files already up to date',
                     'ohlcv_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}",
                     'indicators_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{indicators_filename}",
-                    'skipped': True
+                    'skipped': True,
                 }
-            
-            # Create commit message
-            now = datetime.now()
-            date_str = now.strftime('%Y-%m-%d')
+
+            # Commit
+            date_str = datetime.now().strftime('%Y-%m-%d')
             commit_message = f"""📊 Daily Update: Bitcoin Dataset
 
 📅 Date: {date_str}
@@ -309,50 +308,47 @@ def upload_to_github_with_lfs(**context):
 📦 Files Updated:
   • bitcoin-hourly-ohlcv.csv ({export_info['ohlcv_file_size_mb']:.2f} MB)
     - Raw OHLCV data (UNIX_TIMESTAMP, DATETIME, OPEN, HIGH, CLOSE, LOW, VOLUME)
-  
+
   • bitcoin-hourly-technical-indicators.csv ({export_info['indicators_file_size_mb']:.2f} MB)
     - OHLCV + {export_info['column_count']} Technical Indicators
 
 Automated update via Airflow"""
-            
+
             print("💾 Creating commit...")
-            subprocess.run(['git', 'commit', '-m', commit_message], cwd=tmp_dir, check=True)
-            
-            # Push to GitHub
-            print("⬆️ Pushing to GitHub...")
-            result = subprocess.run(
-                ['git', 'push', 'origin', 'main'],
-                cwd=tmp_dir,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
+            _run_git(['git', 'commit', '-m', commit_message], cwd=tmp_dir)
+
+            # Push (LFS objects uploaded here, only the new blobs)
+            print("⬆️ Pushing to GitHub (LFS objects uploaded now)...")
+            _run_git(['git', 'push', 'origin', 'main'], cwd=tmp_dir)
+
             print("✅ Successfully uploaded both files to GitHub with LFS!")
-            print(f"🔗 OHLCV: https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}")
-            print(f"🔗 With Indicators: https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{indicators_filename}")
-        
-        # Cleanup local files
-        if os.path.exists(export_info['ohlcv_file_path']):
-            os.remove(export_info['ohlcv_file_path'])
-        if os.path.exists(export_info['indicators_file_path']):
-            os.remove(export_info['indicators_file_path'])
+            ohlcv_url = f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}"
+            indicators_url = f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{indicators_filename}"
+            print(f"🔗 OHLCV: {ohlcv_url}")
+            print(f"🔗 With Indicators: {indicators_url}")
+
+        # Cleanup local temp files
+        for path in [export_info['ohlcv_file_path'], export_info['indicators_file_path']]:
+            if os.path.exists(path):
+                os.remove(path)
         print("🧹 Cleaned up local files")
-        
+
         return {
             'success': True,
             'commit_message': commit_message,
-            'ohlcv_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}",
-            'indicators_url': f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{indicators_filename}",
-            'skipped': False
+            'ohlcv_url': ohlcv_url,
+            'indicators_url': indicators_url,
+            'skipped': False,
         }
-        
+
     except subprocess.CalledProcessError as e:
-        print(f"❌ Git command failed: {e.stderr if e.stderr else e.stdout}")
-        raise AirflowException(f"Git operation failed: {e.stderr if e.stderr else e.stdout}")
+        error_msg = e.output or str(e)
+        print(f"❌ Git command failed: {error_msg}")
+        raise AirflowException(f"Git operation failed: {error_msg}")
     except Exception as e:
         print(f"❌ Error uploading to GitHub: {str(e)}")
         raise AirflowException(f"GitHub upload failed: {str(e)}")
+
 
 def send_telegram_notification(**context):
     """Send success notification via Telegram"""
@@ -360,15 +356,13 @@ def send_telegram_notification(**context):
         config = context['task_instance'].xcom_pull(task_ids='get_config')
         export_info = context['task_instance'].xcom_pull(task_ids='export_data')
         upload_info = context['task_instance'].xcom_pull(task_ids='upload_to_github')
-        
+
         if not config['TELEGRAM_BOT_TOKEN']:
             print("⚠️ TELEGRAM_BOT_TOKEN not found, skipping notification")
             return
-        
-        now = datetime.now()
-        date_str = now.strftime('%Y-%m-%d %H:%M UTC')
-        
-        # Check if upload was skipped
+
+        date_str = datetime.now().strftime('%Y-%m-%d %H:%M UTC')
+
         if upload_info.get('skipped'):
             message = f"""ℹ️ *Bitcoin Dataset - No Changes*
 
@@ -392,7 +386,7 @@ _Automated by Airflow DAG_"""
   • *OHLCV Only* ({export_info['ohlcv_file_size_mb']:.2f} MB)
     [View on GitHub]({upload_info['ohlcv_url']})
     Raw OHLCV data without indicators
-  
+
   • *With Technical Indicators* ({export_info['indicators_file_size_mb']:.2f} MB)
     [View on GitHub]({upload_info['indicators_url']})
     OHLCV + {export_info['column_count']} indicators
@@ -400,23 +394,24 @@ _Automated by Airflow DAG_"""
 📦 *Storage*: Git LFS
 
 _Automated by Airflow DAG_"""
-        
+
         url = f"https://api.telegram.org/bot{config['TELEGRAM_BOT_TOKEN']}/sendMessage"
         data = {
             'chat_id': config['TELEGRAM_CHAT_ID'],
             'text': message,
-            'parse_mode': 'Markdown'
+            'parse_mode': 'Markdown',
         }
-        
+
         response = requests.post(url, data=data)
         response.raise_for_status()
-        
+
         print("✅ Telegram notification sent successfully")
         return True
-        
+
     except Exception as e:
         print(f"⚠️ Failed to send Telegram notification: {str(e)}")
         return False
+
 
 # Define tasks
 get_config_task = PythonOperator(
