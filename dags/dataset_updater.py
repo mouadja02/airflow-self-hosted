@@ -129,6 +129,30 @@ batch_metrics = {
 
 }
 
+def ensure_schema_and_table(**context):
+    """Create database, schema, stage and file format if they don't exist"""
+    
+    snowflake_hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+    
+    # Create database if not exists
+    snowflake_hook.run("CREATE DATABASE IF NOT EXISTS BITCOIN_DATA")
+    print("✅ Database BITCOIN_DATA ensured")
+    
+    # Create schema if not exists
+    snowflake_hook.run("CREATE SCHEMA IF NOT EXISTS BITCOIN_DATA.DATA")
+    print("✅ Schema BITCOIN_DATA.DATA ensured")
+    
+    # Create stage and file format
+    snowflake_hook.run("""
+        CREATE FILE FORMAT IF NOT EXISTS BITCOIN_DATA.DATA.json_format
+        TYPE = 'JSON' STRIP_OUTER_ARRAY = TRUE
+    """)
+    snowflake_hook.run("""
+        CREATE STAGE IF NOT EXISTS BITCOIN_DATA.DATA.my_stage
+        FILE_FORMAT = BITCOIN_DATA.DATA.json_format
+    """)
+    print("✅ Stage and file format ensured")
+
 def get_metrics_config(metric_name):
     """Return API and table configuration for each metric"""
     
@@ -794,8 +818,14 @@ def cleanup_stage(**context):
     return result
 
 
-# Create file format tasks for all DAGs
+# Create ensure_db, file format and stage tasks for all DAGs
 for i in range(1, 5):
+    ensure_db = PythonOperator(
+        task_id='ensure_schema_and_table',
+        python_callable=ensure_schema_and_table,
+        dag=dags[i]
+    )
+
     create_format = SnowflakeOperator(
         task_id='create_file_format',
         snowflake_conn_id='snowflake_default',
@@ -822,7 +852,8 @@ for batch_num in range(1, 5):
     prev_task = None
     dag = dags[batch_num]
     
-    # Start with file format
+    # Start with ensure_db >> file format >> stage
+    ensure_task = [task for task in dag.tasks if task.task_id == 'ensure_schema_and_table'][0]
     format_task = [task for task in dag.tasks if task.task_id == 'create_file_format'][0]
     stage_task = [task for task in dag.tasks if task.task_id == 'create_stage'][0]
     
@@ -840,8 +871,8 @@ for batch_num in range(1, 5):
             dag=dag
         )
         
-        # Chain: previous_task >> download >> merge
-        format_task >> stage_task >> download_task >> merge_task
+        # Chain: ensure_db >> format >> stage >> download >> merge
+        ensure_task >> format_task >> stage_task >> download_task >> merge_task
         prev_task = merge_task
 
 

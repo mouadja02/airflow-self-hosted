@@ -12,7 +12,7 @@ Usage:
     python calculate_technical_indicators.py
 
 Input:
-    - CSV file with columns: UNIX_TIMESTAMP, DATETIME, OPEN, HIGH, CLOSE, LOW, VOLUME
+    - CSV file with columns: UNIX_TIMESTAMP, DATETIME, OPEN, HIGH, CLOSE, LOW, VOLUME (or VOLUME_USD)
 
 Output:
     - CSV file with OHLCV + 90+ technical indicators
@@ -24,15 +24,8 @@ import talib
 
 
 def load_ohlcv_data(filepath='bitcoin-hourly-ohlcv.csv'):
-    """
-    Load OHLCV data from CSV file
+    # Load OHLCV data from CSV file
     
-    Args:
-        filepath: Path to CSV file with OHLCV data
-        
-    Returns:
-        pandas DataFrame with OHLCV data
-    """
     print(f"📥 Loading data from {filepath}...")
     df = pd.read_csv(filepath)
     
@@ -45,15 +38,8 @@ def load_ohlcv_data(filepath='bitcoin-hourly-ohlcv.csv'):
 
 
 def calculate_technical_indicators(df):
-    """
-    Calculate comprehensive technical indicators using TA-Lib
-    
-    Args:
-        df: DataFrame with OHLCV data (columns: OPEN, HIGH, CLOSE, LOW, VOLUME)
-        
-    Returns:
-        DataFrame with all original columns + technical indicators
-    """
+    # Calculate comprehensive technical indicators using TA-Lib
+
     print("🔧 Calculating comprehensive technical indicators using TA-Lib...")
     
     # Convert to numpy arrays for TA-Lib
@@ -252,27 +238,13 @@ def calculate_technical_indicators(df):
 
 
 def save_to_csv(df, filepath='bitcoin-hourly-technical-indicators.csv'):
-    """
-    Save DataFrame to CSV file
-    
-    Args:
-        df: DataFrame to save
-        filepath: Output file path
-    """
+    # Save DataFrame to CSV file
     print(f"💾 Saving to {filepath}...")
     df.to_csv(filepath, index=False, float_format='%.8f')
     print(f"✅ Saved {len(df):,} records to {filepath}")
 
 
-def main():
-    """
-    Main function to run the technical indicators calculation
-    """
-    print("=" * 60)
-    print("Bitcoin Technical Indicators Calculator")
-    print("=" * 60)
-    print()
-    
+def main():  
     # Step 1: Load OHLCV data
     df = load_ohlcv_data('bitcoin-hourly-ohlcv.csv')
     print()
@@ -283,20 +255,6 @@ def main():
     
     # Step 3: Save to CSV
     save_to_csv(df_with_indicators, 'bitcoin-hourly-technical-indicators.csv')
-    print()
-    
-    print("=" * 60)
-    print("✅ Process Complete!")
-    print("=" * 60)
-    print()
-    print("📁 Output Files:")
-    print("  • bitcoin-hourly-technical-indicators.csv")
-    print()
-    print("📊 Summary:")
-    print(f"  • Total Records: {len(df_with_indicators):,}")
-    print(f"  • Total Columns: {len(df_with_indicators.columns)}")
-    print(f"  • OHLCV Columns: 7")
-    print(f"  • Technical Indicators: {len(df_with_indicators.columns) - 7}")
     print()
 
 

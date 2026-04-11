@@ -45,6 +45,45 @@ dag = DAG(
     tags=['bitcoin', 'funding-rate', '8hourly', 'snowflake']
 )
 
+def ensure_schema_and_table(**context):
+    """Create database, schema, stage and table if they don't exist"""
+    
+    snowflake_hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+    
+    # Create database if not exists
+    snowflake_hook.run("CREATE DATABASE IF NOT EXISTS BITCOIN_DATA")
+    print("✅ Database BITCOIN_DATA ensured")
+    
+    # Create schemas if not exists
+    snowflake_hook.run("CREATE SCHEMA IF NOT EXISTS BITCOIN_DATA.DATA")
+    snowflake_hook.run("CREATE SCHEMA IF NOT EXISTS BITCOIN_DATA.FORECASTER")
+    print("✅ Schemas ensured")
+    
+    # Create stage and file format
+    snowflake_hook.run("""
+        CREATE FILE FORMAT IF NOT EXISTS BITCOIN_DATA.FORECASTER.json_format
+        TYPE = 'JSON' STRIP_OUTER_ARRAY = TRUE
+    """)
+    snowflake_hook.run("""
+        CREATE STAGE IF NOT EXISTS BITCOIN_DATA.FORECASTER.my_stage
+        FILE_FORMAT = BITCOIN_DATA.FORECASTER.json_format
+    """)
+    print("✅ Stage and file format ensured")
+    
+    # Create table if not exists
+    snowflake_hook.run("""
+    CREATE TABLE IF NOT EXISTS BITCOIN_DATA.DATA.FUNDING_RATE (
+        datetime TIMESTAMP,
+        unix_ts BIGINT,
+        funding_rate FLOAT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
+        PRIMARY KEY (datetime)
+    )
+    """)
+    print("✅ Table BITCOIN_DATA.DATA.FUNDING_RATE ensured")
+
+
 def download_and_upload_funding_rate(**context):
     """
     Download funding rate JSON data from API and upload to Snowflake stage
@@ -186,6 +225,13 @@ def cleanup_stage_files(**context):
     
     return result
 
+# Ensure DB infrastructure exists
+ensure_db_task = PythonOperator(
+    task_id='ensure_schema_and_table',
+    python_callable=ensure_schema_and_table,
+    dag=dag
+)
+
 # Create file format task
 create_file_format = SnowflakeOperator(
     task_id='create_file_format',
@@ -220,4 +266,5 @@ cleanup_task = PythonOperator(
 )
 
 # Set task dependencies
-create_file_format >> download_task >> merge_task >> cleanup_task
+ensure_db_task >> create_file_format >> download_task >> merge_task >> cleanup_task
+

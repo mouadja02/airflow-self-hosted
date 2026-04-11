@@ -1,7 +1,8 @@
 """
 BTC Price Dataset DAG
 Replicates the n8n workflow for fetching Bitcoin hourly price data and storing in Snowflake
-Includes historical data initialization with batching
+Includes database initialization with schema/table creation and historical OHLCV batching since 2010-07-18
+CryptoCompare API limit: 2000 records per call
 """
 
 from datetime import datetime, timedelta
@@ -40,6 +41,40 @@ dag = DAG(
 # Bitcoin started trading in July 2010 (first exchange Mt.Gox)
 BTC_START_TIMESTAMP = int(datetime(2010, 7, 18).timestamp())
 
+# ─── Database Initialization ───────────────────────────────────────────
+
+def ensure_schema_and_table(**context):
+    """Create database, schema and table in Snowflake if they don't exist"""
+    
+    snowflake_hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+    
+    # Create database if not exists
+    snowflake_hook.run("CREATE DATABASE IF NOT EXISTS BITCOIN_DATA")
+    print("✅ Database BITCOIN_DATA ensured")
+    
+    # Create schema if not exists
+    snowflake_hook.run("CREATE SCHEMA IF NOT EXISTS BITCOIN_DATA.DATA")
+    print("✅ Schema BITCOIN_DATA.DATA ensured")
+    
+    # Create table if not exists
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS BITCOIN_DATA.DATA.BTC_HOURLY_DATA (
+        UNIX_TIMESTAMP NUMBER(38,0) PRIMARY KEY,
+        DATE DATE,
+        HOUR_OF_DAY NUMBER(2,0),
+        OPEN FLOAT,
+        HIGH FLOAT,
+        CLOSE FLOAT,
+        LOW FLOAT,
+        VOLUME_BTC FLOAT,
+        VOLUME_USD FLOAT,
+        CREATED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+    )
+    """
+    snowflake_hook.run(create_table_query)
+    print("✅ Table BITCOIN_DATA.DATA.BTC_HOURLY_DATA ensured")
+
+
 def check_historical_data_exists(**context):
     """Check if historical data exists in Snowflake from BTC start"""
     
@@ -60,7 +95,7 @@ def check_historical_data_exists(**context):
             min_timestamp = result[1]
             context['task_instance'].xcom_push(key='min_timestamp', value=min_timestamp)
             
-            # Check if we have data from at least 2010 (when BTC trading started)
+            # Check if we have data from at least 2011 (when BTC trading started)
             if min_timestamp <= int(datetime(2011, 1, 1).timestamp()):
                 print(f"✅ Historical data exists from timestamp {min_timestamp}")
                 print(f"➡️  Branching to: fetch_btc_data")
@@ -75,34 +110,19 @@ def check_historical_data_exists(**context):
             return 'initialize_historical_data'
             
     except Exception as e:
-        print(f"⚠️ Error checking data or table doesn't exist: {str(e)}")
-        print(f"➡️  Branching to: create_table")
-        return 'create_table'
+        print(f"⚠️ Error checking data: {str(e)}")
+        print(f"➡️  Branching to: initialize_historical_data")
+        return 'initialize_historical_data'
 
-def create_table_if_not_exists(**context):
-    """Create the BTC_HOURLY_DATA table if it doesn't exist"""
-    
-    create_table_query = """
-    CREATE TABLE IF NOT EXISTS BITCOIN_DATA.DATA.BTC_HOURLY_DATA (
-        UNIX_TIMESTAMP NUMBER(38,0) PRIMARY KEY,
-        DATE DATE,
-        HOUR_OF_DAY NUMBER(2,0),
-        OPEN FLOAT,
-        HIGH FLOAT,
-        CLOSE FLOAT,
-        LOW FLOAT,
-        VOLUME_BTC FLOAT,
-        VOLUME_USD FLOAT,
-        CREATED_AT TIMESTAMP_NTZ
-    )
-    """
-    
-    snowflake_hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
-    snowflake_hook.run(create_table_query)
-    print("✅ Table created or already exists")
+# ─── Historical Batch Initialization ───────────────────────────────────
 
 def initialize_historical_data(**context):
-    """Fetch all historical data in batches of 2000"""
+    """Prepare batch list for fetching all historical data in batches of 2000
+    
+    CryptoCompare API limit is 2000 records per call.
+    We need to fetch hourly data since 2010-07-18 to present.
+    Each batch covers 2000 hours (~83 days).
+    """
     
     current_timestamp = int(datetime.now().timestamp())
     batches = []
@@ -112,6 +132,7 @@ def initialize_historical_data(**context):
     num_batches = (hours_diff // 2000) + 1
     
     print(f"📊 Need to fetch {hours_diff} hours of data in {num_batches} batches")
+    print(f"📅 From: {datetime.fromtimestamp(BTC_START_TIMESTAMP)} to: {datetime.now()}")
     
     # Create batch list with toTs parameter for each batch
     to_ts = current_timestamp
@@ -129,123 +150,6 @@ def initialize_historical_data(**context):
     print(f"✅ Prepared {len(batches)} batches for historical data fetch")
     return len(batches)
 
-def fetch_historical_batch(**context):
-    """Fetch a single batch of historical data"""
-    
-    batches = context['task_instance'].xcom_pull(task_ids='initialize_historical_data', key='batches')
-    batch_index = context['params'].get('batch_index', 0)
-    
-    if batch_index >= len(batches):
-        print(f"✅ All batches processed")
-        return
-    
-    batch = batches[batch_index]
-    
-    url = "https://min-api.cryptocompare.com/data/v2/histohour"
-    params = {
-        'fsym': 'BTC',
-        'tsym': 'USD',
-        'limit': batch['limit'],
-        'toTs': batch['to_ts']
-    }
-    
-    print(f"📥 Fetching batch {batch['batch_num']} - toTs: {batch['to_ts']}")
-    
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get('Response') == 'Success':
-            context['task_instance'].xcom_push(
-                key=f'batch_data_{batch_index}', 
-                value=data
-            )
-            print(f"✅ Batch {batch['batch_num']} fetched successfully")
-            return data
-        else:
-            raise Exception(f"API returned error: {data.get('Message', 'Unknown error')}")
-            
-    except Exception as e:
-        raise Exception(f"Failed to fetch batch {batch['batch_num']}: {str(e)}")
-
-def process_all_historical_batches(**context):
-    """Process all historical batches with rate limiting"""
-    
-    batches = context['task_instance'].xcom_pull(task_ids='initialize_historical_data', key='batches')
-    total_records = 0
-    all_merge_queries = []
-    
-    for i, batch in enumerate(batches):
-        print(f"📥 Processing batch {i+1}/{len(batches)}")
-        
-        url = "https://min-api.cryptocompare.com/data/v2/histohour"
-        params = {
-            'fsym': 'BTC',
-            'tsym': 'USD',
-            'limit': batch['limit'],
-            'toTs': batch['to_ts']
-        }
-        
-        try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data.get('Response') != 'Success':
-                raise Exception(f"API returned error: {data.get('Message', 'Unknown error')}")
-            
-            response_data = data['Data']['Data']
-            current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Transform data
-            bulk_values = []
-            for record in response_data:
-                date_obj = datetime.fromtimestamp(record['time'])
-                date = date_obj.strftime('%Y-%m-%d')
-                hour = date_obj.hour
-                
-                # Store both BTC volume and USD volume
-                value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumefrom']}, {record['volumeto']}, '{current_timestamp}')"
-                bulk_values.append(value_string)
-            
-            if bulk_values:
-                bulk_values_str = ',\n  '.join(bulk_values)
-                merge_query = generate_merge_query(bulk_values_str)
-
-                # Execute merge immediately for each batch
-                # Suppress verbose Snowflake logging during bulk operations to avoid logging huge MERGE statements
-                sf_connector_logger = logging.getLogger('snowflake.connector')
-                sf_hook_logger = logging.getLogger('airflow.task.hooks.airflow.providers.snowflake.hooks.snowflake.SnowflakeHook')
-                
-                # Store original levels
-                original_connector_level = sf_connector_logger.level
-                original_hook_level = sf_hook_logger.level
-                
-                # Suppress INFO level logging (which includes SQL statements)
-                sf_connector_logger.setLevel(logging.WARNING)
-                sf_hook_logger.setLevel(logging.WARNING)
-
-                snowflake_hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
-                snowflake_hook.run(merge_query)
-
-                # Restore logging levels
-                sf_connector_logger.setLevel(original_connector_level)
-                sf_hook_logger.setLevel(original_hook_level)
-
-                total_records += len(bulk_values)
-                print(f"✅ Batch {i+1}/{len(batches)} - Inserted/Updated {len(bulk_values)} records")
-            
-            if i < len(batches) - 1:
-                time.sleep(1)
-                
-        except Exception as e:
-            print(f"❌ Error processing batch {i+1}: {str(e)}")
-            raise
-    
-    context['task_instance'].xcom_push(key='init_record_count', value=total_records)
-    print(f"✅ Historical initialization complete! Total records: {total_records}")
-    return total_records
 
 def generate_merge_query(bulk_values_str):
     """Generate a MERGE query for bulk insert/update"""
@@ -281,6 +185,87 @@ VALUES
   (source.UNIX_TIMESTAMP, source.DATE, source.HOUR_OF_DAY, source.OPEN, source.HIGH, source.CLOSE, source.LOW, source.VOLUME_BTC, source.VOLUME_USD, source.CREATED_AT);
 """
 
+
+def process_all_historical_batches(**context):
+    """Process all historical batches with rate limiting
+    
+    Fetches data from CryptoCompare API in batches of 2000 (API limit),
+    transforms each batch, and merges into Snowflake immediately.
+    Includes 1-second rate limiting between API calls.
+    """
+    
+    batches = context['task_instance'].xcom_pull(task_ids='initialize_historical_data', key='batches')
+    total_records = 0
+    
+    # Suppress verbose Snowflake logging during bulk operations
+    sf_connector_logger = logging.getLogger('snowflake.connector')
+    sf_hook_logger = logging.getLogger('airflow.task.hooks.airflow.providers.snowflake.hooks.snowflake.SnowflakeHook')
+    original_connector_level = sf_connector_logger.level
+    original_hook_level = sf_hook_logger.level
+    sf_connector_logger.setLevel(logging.WARNING)
+    sf_hook_logger.setLevel(logging.WARNING)
+    
+    try:
+        for i, batch in enumerate(batches):
+            print(f"📥 Processing batch {i+1}/{len(batches)}")
+            
+            url = "https://min-api.cryptocompare.com/data/v2/histohour"
+            params = {
+                'fsym': 'BTC',
+                'tsym': 'USD',
+                'limit': batch['limit'],
+                'toTs': batch['to_ts']
+            }
+            
+            try:
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data.get('Response') != 'Success':
+                    raise Exception(f"API returned error: {data.get('Message', 'Unknown error')}")
+                
+                response_data = data['Data']['Data']
+                current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Transform data
+                bulk_values = []
+                for record in response_data:
+                    date_obj = datetime.fromtimestamp(record['time'])
+                    date = date_obj.strftime('%Y-%m-%d')
+                    hour = date_obj.hour
+                    
+                    value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumefrom']}, {record['volumeto']}, '{current_timestamp}')"
+                    bulk_values.append(value_string)
+                
+                if bulk_values:
+                    bulk_values_str = ',\n  '.join(bulk_values)
+                    merge_query = generate_merge_query(bulk_values_str)
+                    
+                    snowflake_hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+                    snowflake_hook.run(merge_query)
+                    
+                    total_records += len(bulk_values)
+                    print(f"✅ Batch {i+1}/{len(batches)} - Inserted/Updated {len(bulk_values)} records")
+                
+                # Rate limiting: 1 second between API calls
+                if i < len(batches) - 1:
+                    time.sleep(1)
+                    
+            except Exception as e:
+                print(f"❌ Error processing batch {i+1}: {str(e)}")
+                raise
+    finally:
+        # Restore logging levels
+        sf_connector_logger.setLevel(original_connector_level)
+        sf_hook_logger.setLevel(original_hook_level)
+    
+    context['task_instance'].xcom_push(key='init_record_count', value=total_records)
+    print(f"🎉 Historical initialization complete! Total records: {total_records}")
+    return total_records
+
+# ─── Daily Delta Update ────────────────────────────────────────────────
+
 def fetch_btc_data(**context):
     """Fetch Bitcoin hourly data from CryptoCompare API (delta update)"""
     
@@ -290,7 +275,6 @@ def fetch_btc_data(**context):
         'tsym': 'USD',
         'limit': '100'  # Fetch last 100 hours
     }
-    
     
     try:
         response = requests.get(url, params=params)
@@ -324,7 +308,6 @@ def transform_btc_data(**context):
         date = date_obj.strftime('%Y-%m-%d')
         hour = date_obj.hour
         
-        # Store both BTC volume and USD volume
         value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumefrom']}, {record['volumeto']}, '{current_timestamp}')"
         bulk_values.append(value_string)
     
@@ -336,6 +319,8 @@ def transform_btc_data(**context):
     
     print(f"✅ Transformed {len(bulk_values)} records")
     return len(bulk_values)
+
+# ─── Notification ──────────────────────────────────────────────────────
 
 def send_telegram_notification(**context):
     """Send success notification via Telegram"""
@@ -352,7 +337,7 @@ def send_telegram_notification(**context):
     delta_count = context['task_instance'].xcom_pull(task_ids='transform_btc_data', key='record_count')
     
     if init_count:
-        message = f"✅ Historical BTC data initialization complete! 🎉\n📊 Loaded {init_count} records from 2009 to now"
+        message = f"✅ Historical BTC data initialization complete! 🎉\n📊 Loaded {init_count} records from 2010-07-18 to now"
     elif delta_count:
         message = f"✅ Hourly Price dataset successfully refreshed! 🔄 ❄️\nProcessed {delta_count} records"
     else:
@@ -371,19 +356,23 @@ def send_telegram_notification(**context):
     except Exception as e:
         print(f"Failed to send Telegram notification: {str(e)}")
 
-# Define tasks
+# ─── Task Definitions ──────────────────────────────────────────────────
+
+# Step 1: Ensure DB infrastructure exists
+ensure_db_task = PythonOperator(
+    task_id='ensure_schema_and_table',
+    python_callable=ensure_schema_and_table,
+    dag=dag,
+)
+
+# Step 2: Check if historical data needs initialization
 check_data_task = BranchPythonOperator(
     task_id='check_historical_data',
     python_callable=check_historical_data_exists,
     dag=dag,
 )
 
-create_table_task = PythonOperator(
-    task_id='create_table',
-    python_callable=create_table_if_not_exists,
-    dag=dag,
-)
-
+# Path A: Historical initialization
 init_historical_task = PythonOperator(
     task_id='initialize_historical_data',
     python_callable=initialize_historical_data,
@@ -397,6 +386,7 @@ process_batches_task = PythonOperator(
     dag=dag,
 )
 
+# Path B: Daily delta update
 fetch_data_task = PythonOperator(
     task_id='fetch_btc_data',
     python_callable=fetch_btc_data,
@@ -424,12 +414,14 @@ execute_merge_task = SnowflakeOperator(
     **snowflake_conn_params,
 )
 
+# Join point
 join_task = EmptyOperator(
     task_id='join_paths',
     trigger_rule='none_failed_min_one_success',
     dag=dag,
 )
 
+# Notification
 telegram_notification_task = PythonOperator(
     task_id='send_telegram_notification',
     python_callable=send_telegram_notification,
@@ -437,16 +429,20 @@ telegram_notification_task = PythonOperator(
     dag=dag,
 )
 
+# ─── Task Dependencies ─────────────────────────────────────────────────
+#
+#  ensure_schema_and_table >> check_historical_data
+#       ├── initialize_historical_data >> process_all_historical_batches >> join_paths
+#       └── fetch_btc_data >> transform_btc_data >> execute_snowflake_merge >> join_paths
+#  join_paths >> send_telegram_notification
+#
 
-check_data_task >> [create_table_task, init_historical_task, fetch_data_task]
+ensure_db_task >> check_data_task >> [init_historical_task, fetch_data_task]
 
-# Path 1 & 2: Create table if needed, then initialize
-create_table_task >> init_historical_task
-
-# Initialize then process batches
+# Path A: Init >> Process batches
 init_historical_task >> process_batches_task
 
-# Fetch and merge new data path
+# Path B: Fetch >> Transform >> Merge
 fetch_data_task >> transform_data_task >> execute_merge_task
 
 # All paths converge at join

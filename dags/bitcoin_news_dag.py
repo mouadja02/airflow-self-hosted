@@ -1,6 +1,7 @@
 """
 Bitcoin News DAG - Production Version
 Fetches Bitcoin news from multiple APIs and stores in Snowflake with duplicate prevention
+Includes database initialization with schema/table creation for data recovery
 """
 
 from datetime import datetime, timedelta
@@ -34,6 +35,42 @@ dag = DAG(
     catchup=False,
     tags=['bitcoin', 'news', 'snowflake', 'production'],
 )
+
+# ─── Database Initialization ───────────────────────────────────────────
+
+def ensure_schema_and_table(**context):
+    """Create database, schema and table in Snowflake if they don't exist"""
+    
+    hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+    
+    # Create database if not exists
+    hook.run("CREATE DATABASE IF NOT EXISTS BITCOIN_DATA")
+    print("✅ Database BITCOIN_DATA ensured")
+    
+    # Create RAW schema if not exists (news goes to RAW schema)
+    hook.run("CREATE SCHEMA IF NOT EXISTS BITCOIN_DATA.RAW")
+    print("✅ Schema BITCOIN_DATA.RAW ensured")
+    
+    # Create table if not exists
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS BITCOIN_DATA.RAW.BITCOIN_NEWS (
+        datetime TIMESTAMP,
+        headline VARCHAR(2000),
+        summary VARCHAR(10000),
+        source VARCHAR(500),
+        url VARCHAR(1000),
+        categories VARCHAR(1000),
+        tags VARCHAR(1000),
+        api_source VARCHAR(100),
+        file_name VARCHAR(500),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+    )
+    """
+    hook.run(create_table_sql)
+    print("✅ Table BITCOIN_DATA.RAW.BITCOIN_NEWS ensured")
+
+
+# ─── Data Functions ────────────────────────────────────────────────────
 
 def get_last_datetime_from_snowflake():
     """Get the latest datetime from Snowflake to avoid duplicates"""
@@ -399,7 +436,15 @@ def send_production_notification(**context):
     except Exception as e:
         print(f"Failed to send notification: {str(e)}")
 
-# Define tasks
+# ─── Task Definitions ──────────────────────────────────────────────────
+
+# Step 1: Ensure DB infrastructure exists
+ensure_db_task = PythonOperator(
+    task_id='ensure_schema_and_table',
+    python_callable=ensure_schema_and_table,
+    dag=dag,
+)
+
 fetch_cryptocompare_task = PythonOperator(
     task_id='fetch_cryptocompare_news',
     python_callable=fetch_cryptocompare_news,
@@ -436,5 +481,7 @@ notification_task = PythonOperator(
     dag=dag,
 )
 
-# Set task dependencies
-[fetch_cryptocompare_task, fetch_finnhub_task] >> merge_deduplicate_task >> insert_snowflake_task >> notification_task
+# ─── Task Dependencies ─────────────────────────────────────────────────
+# ensure_schema_and_table >> [fetch_*] >> merge >> insert >> notification
+
+ensure_db_task >> [fetch_cryptocompare_task, fetch_finnhub_task] >> merge_deduplicate_task >> insert_snowflake_task >> notification_task

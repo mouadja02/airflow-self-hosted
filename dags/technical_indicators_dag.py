@@ -40,6 +40,80 @@ dag = DAG(
 )
 
 
+def ensure_schema_and_table(**context):
+    """Create database, schema and HOURLY_TA table in Snowflake if they don't exist"""
+    
+    hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+    
+    # Create database if not exists
+    hook.run("CREATE DATABASE IF NOT EXISTS BITCOIN_DATA")
+    print("✅ Database BITCOIN_DATA ensured")
+    
+    # Create schema if not exists
+    hook.run("CREATE SCHEMA IF NOT EXISTS BITCOIN_DATA.DATA")
+    print("✅ Schema BITCOIN_DATA.DATA ensured")
+    
+    # Create HOURLY_TA table if not exists with primary key
+    create_table_sql = """
+    CREATE TABLE IF NOT EXISTS BITCOIN_DATA.DATA.HOURLY_TA (
+        UNIX_TIMESTAMP NUMBER(38,0) PRIMARY KEY,
+        datetime TIMESTAMP_NTZ,
+        OPEN FLOAT,
+        HIGH FLOAT,
+        CLOSE FLOAT,
+        LOW FLOAT,
+        VOLUME FLOAT,
+        -- Overlap Studies
+        sma_5 FLOAT, sma_10 FLOAT, sma_20 FLOAT, sma_50 FLOAT, sma_100 FLOAT, sma_200 FLOAT,
+        ema_5 FLOAT, ema_10 FLOAT, ema_12 FLOAT, ema_20 FLOAT, ema_26 FLOAT, ema_50 FLOAT,
+        wma_10 FLOAT, wma_20 FLOAT, dema_10 FLOAT, dema_20 FLOAT,
+        tema_10 FLOAT, tema_20 FLOAT, trima_20 FLOAT, kama_20 FLOAT, t3_5 FLOAT,
+        bb_upper FLOAT, bb_middle FLOAT, bb_lower FLOAT,
+        -- Momentum Indicators
+        rsi_7 FLOAT, rsi_14 FLOAT, rsi_21 FLOAT,
+        macd FLOAT, macd_signal FLOAT, macd_hist FLOAT,
+        slowk FLOAT, slowd FLOAT, fastk FLOAT, fastd FLOAT,
+        stochrsi_fastk FLOAT, stochrsi_fastd FLOAT,
+        cci_14 FLOAT, cci_20 FLOAT, cmo_14 FLOAT,
+        mom_10 FLOAT, roc_10 FLOAT, rocp_10 FLOAT, rocr_10 FLOAT,
+        willr_14 FLOAT, ppo FLOAT, apo FLOAT, bop FLOAT, ultosc FLOAT,
+        -- Volume Indicators
+        ad FLOAT, adosc FLOAT, obv FLOAT, mfi_14 FLOAT,
+        -- Volatility Indicators
+        atr_14 FLOAT, natr_14 FLOAT, trange FLOAT,
+        -- Price Transform
+        avgprice FLOAT, medprice FLOAT, typprice FLOAT, wclprice FLOAT,
+        -- Trend Indicators
+        adx_14 FLOAT, adxr_14 FLOAT, dx_14 FLOAT,
+        minus_di FLOAT, plus_di FLOAT, minus_dm FLOAT, plus_dm FLOAT,
+        aroon_down FLOAT, aroon_up FLOAT, aroonosc FLOAT, sar FLOAT,
+        -- Statistical Functions
+        beta FLOAT, correl FLOAT, linearreg FLOAT, linearreg_angle FLOAT,
+        linearreg_intercept FLOAT, linearreg_slope FLOAT,
+        stddev FLOAT, tsf FLOAT, var FLOAT,
+        -- Hilbert Transform
+        ht_dcperiod FLOAT, ht_dcphase FLOAT, ht_trendmode FLOAT,
+        ht_sine FLOAT, ht_leadsine FLOAT, ht_inphase FLOAT, ht_quadrature FLOAT, ht_trendline FLOAT,
+        -- Cycle Indicators
+        mama FLOAT, fama FLOAT,
+        -- Pattern Recognition
+        cdl_doji FLOAT, cdl_hammer FLOAT, cdl_inverted_hammer FLOAT,
+        cdl_hanging_man FLOAT, cdl_shooting_star FLOAT, cdl_engulfing FLOAT,
+        cdl_morning_star FLOAT, cdl_evening_star FLOAT,
+        cdl_three_white_soldiers FLOAT, cdl_three_black_crows FLOAT,
+        cdl_harami FLOAT, cdl_dark_cloud_cover FLOAT, cdl_piercing FLOAT,
+        cdl_marubozu FLOAT, cdl_spinning_top FLOAT,
+        -- Custom Features
+        price_change FLOAT, high_low_ratio FLOAT, close_open_ratio FLOAT,
+        volatility_30d FLOAT, price_volatility_30d FLOAT, hl_volatility_30d FLOAT,
+        -- Metadata
+        created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
+    )
+    """
+    hook.run(create_table_sql)
+    print("✅ Table BITCOIN_DATA.DATA.HOURLY_TA ensured")
+
+
 def check_table_status(**context):
     """
     Check if HOURLY_TA table needs initialization or just delta update
@@ -537,6 +611,12 @@ VALUES
         raise
 
 # Define tasks
+ensure_db_task = PythonOperator(
+    task_id='ensure_schema_and_table',
+    python_callable=ensure_schema_and_table,
+    dag=dag,
+)
+
 check_status_task = BranchPythonOperator(
     task_id='check_table_status',
     python_callable=check_table_status,
@@ -568,7 +648,8 @@ end_task = EmptyOperator(
 )
 
 # Set task dependencies
-check_status_task >> [initialize_task, delta_update_task, skip_task]
+ensure_db_task >> check_status_task >> [initialize_task, delta_update_task, skip_task]
 initialize_task >> end_task
 delta_update_task >> end_task
 skip_task >> end_task
+
