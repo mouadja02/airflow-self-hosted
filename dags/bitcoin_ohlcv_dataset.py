@@ -1,8 +1,8 @@
 """
 BTC Price Dataset DAG
-Replicates the n8n workflow for fetching Bitcoin hourly price data and storing in Snowflake
-Includes database initialization with schema/table creation and historical OHLCV batching since 2010-07-18
-CryptoCompare API limit: 2000 records per call
+Fetches Bitcoin hourly OHLCV price data from Binance public API and stores in Snowflake.
+Includes database initialization with schema/table creation and historical OHLCV batching since 2017-08-17.
+Binance klines API limit: 1000 records per call. No API key required.
 """
 
 from datetime import datetime, timedelta
@@ -38,8 +38,8 @@ dag = DAG(
     tags=['bitcoin', 'cryptocurrency', 'snowflake'],
 )
 
-# Bitcoin started trading in July 2010 (first exchange Mt.Gox)
-BTC_START_TIMESTAMP = int(datetime(2010, 7, 18).timestamp())
+# BTCUSDT listed on Binance in August 2017
+BTC_START_TIMESTAMP = int(datetime(2017, 8, 17).timestamp())
 
 # ─── Database Initialization ───────────────────────────────────────────
 
@@ -95,8 +95,8 @@ def check_historical_data_exists(**context):
             min_timestamp = result[1]
             context['task_instance'].xcom_push(key='min_timestamp', value=min_timestamp)
             
-            # Check if we have data from at least 2011 (when BTC trading started)
-            if min_timestamp <= int(datetime(2011, 1, 1).timestamp()):
+            # Check if we have data from Binance listing era
+            if min_timestamp <= int(datetime(2017, 9, 1).timestamp()):
                 print(f"✅ Historical data exists from timestamp {min_timestamp}")
                 print(f"➡️  Branching to: fetch_btc_data")
                 return 'fetch_btc_data'
@@ -117,36 +117,45 @@ def check_historical_data_exists(**context):
 # ─── Historical Batch Initialization ───────────────────────────────────
 
 def initialize_historical_data(**context):
-    """Prepare batch list for fetching all historical data in batches of 2000
-    
-    CryptoCompare API limit is 2000 records per call.
-    We need to fetch hourly data since 2010-07-18 to present.
-    Each batch covers 2000 hours (~83 days).
+    """Prepare batch list for fetching all historical data in batches of 1000
+
+    Binance klines API limit is 1000 records per call.
+    We need to fetch hourly data since 2017-08-17 to present.
+    Each batch covers 1000 hours (~41 days).
     """
-    
+
     current_timestamp = int(datetime.now().timestamp())
     batches = []
-    
-    # Calculate number of batches needed (2000 hours per batch)
+
+    # Calculate number of batches needed (1000 hours per batch)
     hours_diff = (current_timestamp - BTC_START_TIMESTAMP) // 3600
-    num_batches = (hours_diff // 2000) + 1
-    
+    num_batches = (hours_diff // 1000) + 1
+
     print(f"📊 Need to fetch {hours_diff} hours of data in {num_batches} batches")
     print(f"📅 From: {datetime.fromtimestamp(BTC_START_TIMESTAMP)} to: {datetime.now()}")
-    
-    # Create batch list with toTs parameter for each batch
+
+    # Create batch list with startTime/endTime in milliseconds (Binance uses ms)
     to_ts = current_timestamp
     for i in range(num_batches):
+        start_ts = max(to_ts - (1000 * 3600), BTC_START_TIMESTAMP)
         batches.append({
             'batch_num': i + 1,
-            'to_ts': to_ts,
-            'limit': 2000
+            'start_time': start_ts * 1000,
+            'end_time': to_ts * 1000,
+            'limit': 1000
         })
-        to_ts = to_ts - (2000 * 3600)  # Go back 2000 hours
+        to_ts = start_ts
+        if to_ts <= BTC_START_TIMESTAMP:
+            break
     
+    # Reverse so we process oldest→newest
+    batches = list(reversed(batches))
+    for idx, b in enumerate(batches):
+        b['batch_num'] = idx + 1
+
     context['task_instance'].xcom_push(key='batches', value=batches)
     context['task_instance'].xcom_push(key='total_batches', value=len(batches))
-    
+
     print(f"✅ Prepared {len(batches)} batches for historical data fetch")
     return len(batches)
 
@@ -188,8 +197,8 @@ VALUES
 
 def process_all_historical_batches(**context):
     """Process all historical batches with rate limiting
-    
-    Fetches data from CryptoCompare API in batches of 2000 (API limit),
+
+    Fetches data from Binance klines API in batches of 1000 (API limit),
     transforms each batch, and merges into Snowflake immediately.
     Includes 1-second rate limiting between API calls.
     """
@@ -209,33 +218,42 @@ def process_all_historical_batches(**context):
         for i, batch in enumerate(batches):
             print(f"📥 Processing batch {i+1}/{len(batches)}")
             
-            url = "https://min-api.cryptocompare.com/data/v2/histohour"
+            url = "https://api.binance.com/api/v3/klines"
             params = {
-                'fsym': 'BTC',
-                'tsym': 'USD',
+                'symbol': 'BTCUSDT',
+                'interval': '1h',
+                'startTime': batch['start_time'],
+                'endTime': batch['end_time'],
                 'limit': batch['limit'],
-                'toTs': batch['to_ts']
             }
-            
+
             try:
                 response = requests.get(url, params=params)
                 response.raise_for_status()
                 data = response.json()
-                
-                if data.get('Response') != 'Success':
-                    raise Exception(f"API returned error: {data.get('Message', 'Unknown error')}")
-                
-                response_data = data['Data']['Data']
+
+                if not isinstance(data, list):
+                    raise Exception(f"API returned error: {data.get('msg', 'Unknown error')}")
+
+                response_data = data
                 current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                # Transform data
+
+                # Transform data — Binance kline: [openTime, open, high, low, close, volume, closeTime, quoteVolume, ...]
                 bulk_values = []
                 for record in response_data:
-                    date_obj = datetime.fromtimestamp(record['time'])
+                    unix_timestamp = record[0] // 1000  # ms → s
+                    date_obj = datetime.fromtimestamp(unix_timestamp)
                     date = date_obj.strftime('%Y-%m-%d')
                     hour = date_obj.hour
-                    
-                    value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumefrom']}, {record['volumeto']}, '{current_timestamp}')"
+
+                    open_p  = float(record[1])
+                    high_p  = float(record[2])
+                    low_p   = float(record[3])
+                    close_p = float(record[4])
+                    vol_btc = float(record[5])
+                    vol_usd = float(record[7])
+
+                    value_string = f"({unix_timestamp}, '{date}', {hour}, {open_p}, {high_p}, {close_p}, {low_p}, {vol_btc}, {vol_usd}, '{current_timestamp}')"
                     bulk_values.append(value_string)
                 
                 if bulk_values:
@@ -267,48 +285,56 @@ def process_all_historical_batches(**context):
 # ─── Daily Delta Update ────────────────────────────────────────────────
 
 def fetch_btc_data(**context):
-    """Fetch Bitcoin hourly data from CryptoCompare API (delta update)"""
-    
-    url = "https://min-api.cryptocompare.com/data/v2/histohour"
+    """Fetch Bitcoin hourly data from Binance public API (delta update)"""
+
+    url = "https://api.binance.com/api/v3/klines"
     params = {
-        'fsym': 'BTC',
-        'tsym': 'USD',
-        'limit': '100'  # Fetch last 100 hours
+        'symbol': 'BTCUSDT',
+        'interval': '1h',
+        'limit': 100,  # Last 100 hours
     }
-    
+
     try:
         response = requests.get(url, params=params)
         response.raise_for_status()
         data = response.json()
-        
-        if data.get('Response') == 'Success':
+
+        if isinstance(data, list):
             context['task_instance'].xcom_push(key='btc_raw_data', value=data)
             return data
         else:
-            raise Exception(f"API returned error: {data.get('Message', 'Unknown error')}")
-            
+            raise Exception(f"API returned error: {data.get('msg', 'Unknown error')}")
+
     except Exception as e:
         raise Exception(f"Failed to fetch BTC data: {str(e)}")
 
 def transform_btc_data(**context):
-    """Transform Bitcoin data for Snowflake insertion"""
-    
+    """Transform Bitcoin data from Binance klines format for Snowflake insertion"""
+
     raw_data = context['task_instance'].xcom_pull(task_ids='fetch_btc_data', key='btc_raw_data')
-    
-    if not raw_data or 'Data' not in raw_data or 'Data' not in raw_data['Data']:
+
+    if not raw_data or not isinstance(raw_data, list):
         raise Exception("No valid data received from API")
-    
-    response_data = raw_data['Data']['Data']
+
+    response_data = raw_data
     current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Transform data for Snowflake
+
+    # Transform Binance kline records: [openTime, open, high, low, close, volume, closeTime, quoteVolume, ...]
     bulk_values = []
     for record in response_data:
-        date_obj = datetime.fromtimestamp(record['time'])
+        unix_timestamp = record[0] // 1000  # ms → s
+        date_obj = datetime.fromtimestamp(unix_timestamp)
         date = date_obj.strftime('%Y-%m-%d')
         hour = date_obj.hour
-        
-        value_string = f"({record['time']}, '{date}', {hour}, {record['open']}, {record['high']}, {record['close']}, {record['low']}, {record['volumefrom']}, {record['volumeto']}, '{current_timestamp}')"
+
+        open_p  = float(record[1])
+        high_p  = float(record[2])
+        low_p   = float(record[3])
+        close_p = float(record[4])
+        vol_btc = float(record[5])
+        vol_usd = float(record[7])
+
+        value_string = f"({unix_timestamp}, '{date}', {hour}, {open_p}, {high_p}, {close_p}, {low_p}, {vol_btc}, {vol_usd}, '{current_timestamp}')"
         bulk_values.append(value_string)
     
     bulk_values_str = ',\n  '.join(bulk_values)
@@ -337,7 +363,7 @@ def send_telegram_notification(**context):
     delta_count = context['task_instance'].xcom_pull(task_ids='transform_btc_data', key='record_count')
     
     if init_count:
-        message = f"✅ Historical BTC data initialization complete! 🎉\n📊 Loaded {init_count} records from 2010-07-18 to now"
+        message = f"✅ Historical BTC data initialization complete! 🎉\n📊 Loaded {init_count} records from 2017-08-17 to now"
     elif delta_count:
         message = f"✅ Hourly Price dataset successfully refreshed! 🔄 ❄️\nProcessed {delta_count} records"
     else:
