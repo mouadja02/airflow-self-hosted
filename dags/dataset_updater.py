@@ -576,19 +576,23 @@ def merge_metric_data(metric_name, **context):
         merge_sql = f"""
             MERGE INTO BITCOIN_DATA.DATA.{config['table_name']} AS target
             USING (
-                SELECT {config['select_clause']}
-                FROM @BITCOIN_DATA.DATA.my_stage/{filename} (FILE_FORMAT => BITCOIN_DATA.DATA.json_format)
+                SELECT * FROM (
+                    SELECT {config['select_clause']}
+                    FROM @BITCOIN_DATA.DATA.my_stage/{filename} (FILE_FORMAT => BITCOIN_DATA.DATA.json_format)
+                )
+                WHERE date IS NOT NULL
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY date ORDER BY unix_ts DESC) = 1
             ) AS source
             ON target.date = source.date
             WHEN MATCHED THEN
-                UPDATE SET unix_ts = source.unix_ts, sp500 = source.sp500, gold = source.gold, 
-                           silver = source.silver, strategy = source.strategy, microsoft = source.microsoft, 
-                           meta = source.meta, google = source.google, apple = source.apple, 
+                UPDATE SET unix_ts = source.unix_ts, sp500 = source.sp500, gold = source.gold,
+                           silver = source.silver, strategy = source.strategy, microsoft = source.microsoft,
+                           meta = source.meta, google = source.google, apple = source.apple,
                            amazon = source.amazon, nvidia = source.nvidia
             WHEN NOT MATCHED THEN
                 INSERT {config['columns']}
-                VALUES (source.date, source.unix_ts, source.sp500, source.gold, source.silver, 
-                        source.strategy, source.microsoft, source.meta, source.google, source.apple, 
+                VALUES (source.date, source.unix_ts, source.sp500, source.gold, source.silver,
+                        source.strategy, source.microsoft, source.meta, source.google, source.apple,
                         source.amazon, source.nvidia);
             """
     else:
@@ -600,12 +604,16 @@ def merge_metric_data(metric_name, **context):
                 PRIMARY KEY (date)
             );
             """
-        
+
         merge_sql = f"""
             MERGE INTO BITCOIN_DATA.DATA.{config['table_name']} AS target
             USING (
-                SELECT {config['select_clause']}
-                FROM @BITCOIN_DATA.DATA.my_stage/{filename} (FILE_FORMAT => BITCOIN_DATA.DATA.json_format)
+                SELECT * FROM (
+                    SELECT {config['select_clause']}
+                    FROM @BITCOIN_DATA.DATA.my_stage/{filename} (FILE_FORMAT => BITCOIN_DATA.DATA.json_format)
+                )
+                WHERE date IS NOT NULL
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY date ORDER BY unix_ts DESC) = 1
             ) AS source
             ON target.date = source.date
             WHEN MATCHED THEN
