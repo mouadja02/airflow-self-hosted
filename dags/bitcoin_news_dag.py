@@ -86,8 +86,9 @@ def ensure_schema_and_table(**context):
 
 def check_historical_data_exists(**context):
     """
-    Route to historical backfill unless we already have Guardian articles going
-    back to at least 2015. Once the backfill is done, only the delta path runs.
+    Always run Finnhub + AlphaVantage for fresh news.
+    Additionally run Guardian backfill until history reaches 2015,
+    then switch Guardian to delta-only mode.
     """
     hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
     try:
@@ -104,12 +105,12 @@ def check_historical_data_exists(**context):
             print(f"✅ History OK — oldest: {min_dt} ({count} articles). Running delta.")
             return ['fetch_guardian_delta', 'fetch_finnhub_news', 'fetch_alphavantage_news']
 
-        print(f"⚠️ Insufficient history (oldest: {min_dt}, count: {count}). Running backfill.")
-        return 'initialize_historical_guardian'
+        print(f"⚠️ Insufficient history (oldest: {min_dt}, count: {count}). Running backfill + live fetches.")
+        return ['initialize_historical_guardian', 'fetch_finnhub_news', 'fetch_alphavantage_news']
 
     except Exception as e:
-        print(f"⚠️ Branch check error: {e}. Defaulting to backfill.")
-        return 'initialize_historical_guardian'
+        print(f"⚠️ Branch check error: {e}. Defaulting to backfill + live fetches.")
+        return ['initialize_historical_guardian', 'fetch_finnhub_news', 'fetch_alphavantage_news']
 
 
 # ── Guardian helpers ───────────────────────────────────────────────────────────
@@ -673,6 +674,7 @@ fetch_alphavantage_task = PythonOperator(
 merge_dedup_task = PythonOperator(
     task_id='merge_and_deduplicate_news',
     python_callable=merge_and_deduplicate_news,
+    trigger_rule='none_failed_min_one_success',
     dag=dag,
 )
 
@@ -706,11 +708,14 @@ notification_task = PythonOperator(
 #  ensure_schema_and_table
 #      >> check_historical_data
 #           ├── initialize_historical_guardian ─────────────────────────────────► join_paths
-#           └── [fetch_guardian_delta, fetch_finnhub_news, fetch_alphavantage_news]
-#                    >> merge_and_deduplicate_news
-#                    >> insert_news_to_snowflake
-#                    >> backup_to_github ─────────────────────────────────────► join_paths
+#           ├── fetch_guardian_delta ──┐
+#           ├── fetch_finnhub_news ────┼── merge_and_deduplicate_news
+#           └── fetch_alphavantage_news┘       >> insert_news_to_snowflake
+#                                              >> backup_to_github ───────────► join_paths
 #  join_paths >> send_production_notification
+#
+#  During backfill: guardian backfill + finnhub + alphavantage run in parallel
+#  After backfill:  guardian delta + finnhub + alphavantage run in parallel
 #
 
 ensure_db_task >> check_data_task >> [

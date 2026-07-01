@@ -117,6 +117,7 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
+    hostname: airflow-scheduler
     healthcheck:
       test: [ "CMD", "curl", "--fail", "http://0.0.0.0:8974/health" ]
       interval: 30s
