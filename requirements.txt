@@ -6,7 +6,7 @@ apache-airflow-providers-github
 pandas
 pyarrow
 numpy
-ta-lib
+TA-lib
 beautifulsoup4
 lxml
 pinecone
