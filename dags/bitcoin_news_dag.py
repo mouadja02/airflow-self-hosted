@@ -26,6 +26,9 @@ import os
 import random
 import base64
 import time
+import subprocess
+import tempfile
+import shutil
 import requests
 from datetime import datetime, timedelta, date
 from airflow import DAG
@@ -542,52 +545,138 @@ def insert_news_to_snowflake(**context):
     return len(unique)
 
 
+# ── Git helper ─────────────────────────────────────────────────────────────────
+
+def _run_git(cmd, cwd=None, env=None, capture=True):
+    """Helper to run git commands with consistent error handling."""
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=env,
+        capture_output=capture,
+        text=True,
+    )
+    if result.returncode != 0:
+        output = result.stderr or result.stdout or ""
+        raise subprocess.CalledProcessError(result.returncode, cmd, output=output)
+    return result
+
+
 # ── GitHub backup ──────────────────────────────────────────────────────────────
 
 def backup_to_github(**context):
-    unique = context['task_instance'].xcom_pull(task_ids='merge_and_deduplicate_news', key='unique_news') or []
-    if not unique:
-        return "No data to backup"
+    """Export the full BITCOIN_NEWS table from Snowflake and push to GitHub via Git LFS.
 
-    github_token = os.getenv('GITHUB_TOKEN')
+    Uses GIT_LFS_SKIP_SMUDGE=1 during clone so LFS objects are NOT downloaded
+    (only pointers), avoiding bandwidth issues. Only new content is pushed.
+    """
+    github_token    = os.getenv('GITHUB_TOKEN')
+    github_username = os.getenv('GITHUB_USERNAME', 'mouadja02')
+    github_repo     = os.getenv('GITHUB_REPO_BTC_NEWS', 'bitcoin-news-data')
+    github_email    = 'mouadpro02@gmail.com'
+
     if not github_token:
         print("GitHub token not found — skipping backup")
         return "Skipped"
 
-    now      = datetime.now() + timedelta(hours=2)
-    date_str = now.strftime('%Y-%m-%d_%H-%M')
-    folder   = now.strftime('%d%m%Y')
+    # ── 1. Export full table from Snowflake ─────────────────────────────────
+    print("📊 Exporting full BITCOIN_NEWS table from Snowflake...")
+    hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
 
-    rows = ['datetime,headline,summary,source,url,categories,tags,api_source']
-    for item in unique:
-        row = [
-            item.get('datetime', ''),
-            f'"{item.get("headline","").replace(chr(34), chr(34)*2)}"',
-            f'"{item.get("summary","").replace(chr(34), chr(34)*2)}"',
-            item.get('source', '').replace(',', ''),
-            item.get('url', ''),
-            f'"{item.get("categories","")}"',
-            f'"{item.get("tags","")}"',
-            item.get('api_source', ''),
-        ]
-        rows.append(','.join(row))
+    df = hook.get_pandas_df("""
+        SELECT datetime, headline, summary, source, url,
+               categories, tags, api_source, file_name, created_at
+        FROM BITCOIN_DATA.RAW.BITCOIN_NEWS
+        ORDER BY datetime ASC
+    """)
+    record_count = len(df)
+    print(f"✅ Fetched {record_count:,} total articles")
 
-    content_b64 = base64.b64encode('\n'.join(rows).encode()).decode()
-    file_path   = f"{folder}/bitcoin_news_{date_str}.csv"
-    api_url     = f"https://api.github.com/repos/mouadja02/bitcoin-news-data/contents/{file_path}"
-    headers     = {'Authorization': f'token {github_token}', 'Accept': 'application/vnd.github.v3+json'}
-    body        = {'message': f'Backup: BTC news {date_str}', 'content': content_b64}
+    if record_count == 0:
+        print("No data to backup")
+        return "No data"
+
+    csv_path = '/tmp/bitcoin-news-full.csv'
+    df.to_csv(csv_path, index=False, encoding='utf-8', chunksize=10000)
+    del df
+
+    file_size_mb = os.path.getsize(csv_path) / (1024 * 1024)
+    print(f"💾 CSV written: {file_size_mb:.2f} MB")
+
+    # ── 2. Clone, commit, push via Git LFS ─────────────────────────────────
+    git_env = os.environ.copy()
+    git_env["GIT_LFS_SKIP_SMUDGE"] = "1"
 
     try:
-        check = requests.get(api_url, headers=headers, timeout=15)
-        if check.status_code == 200:
-            body['sha'] = check.json()['sha']
-        requests.put(api_url, headers=headers, json=body, timeout=15).raise_for_status()
-        print(f"✅ Backed up {len(unique)} articles to GitHub")
-        return f"Backed up {len(unique)} articles"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            repo_url = (
+                f"https://{github_token}@github.com"
+                f"/{github_username}/{github_repo}.git"
+            )
+
+            print("📥 Cloning repository (LFS smudge disabled — pointers only)...")
+            _run_git(['git', 'clone', repo_url, tmp_dir], env=git_env)
+
+            print("🔧 Configuring git...")
+            _run_git(['git', 'config', 'user.name', github_username], cwd=tmp_dir)
+            _run_git(['git', 'config', 'user.email', github_email], cwd=tmp_dir)
+
+            print("🔧 Initializing Git LFS...")
+            _run_git(['git', 'lfs', 'install'], cwd=tmp_dir)
+            _run_git(['git', 'lfs', 'track', '*.csv'], cwd=tmp_dir)
+
+            gitattributes_path = os.path.join(tmp_dir, '.gitattributes')
+            if os.path.exists(gitattributes_path):
+                _run_git(['git', 'add', '.gitattributes'], cwd=tmp_dir)
+
+            csv_filename = 'bitcoin-news.csv'
+            csv_dest = os.path.join(tmp_dir, csv_filename)
+
+            print("📋 Copying CSV to repository...")
+            shutil.copy2(csv_path, csv_dest)
+
+            _run_git(['git', 'add', csv_filename], cwd=tmp_dir)
+
+            # Check for changes
+            status = _run_git(['git', 'status', '--porcelain'], cwd=tmp_dir)
+            if not status.stdout.strip():
+                print("ℹ️ No changes detected — repository is already up to date")
+                return "No changes"
+
+            date_str = datetime.now().strftime('%Y-%m-%d')
+            commit_message = (
+                f"📰 Daily Update: Bitcoin News Dataset\n\n"
+                f"📅 Date: {date_str}\n"
+                f"📈 Total Articles: {record_count:,}\n"
+                f"💾 File Size: {file_size_mb:.2f} MB\n\n"
+                f"📦 Sources: Guardian, Finnhub, AlphaVantage\n\n"
+                f"Automated update via Airflow"
+            )
+
+            print("💾 Creating commit...")
+            _run_git(['git', 'commit', '-m', commit_message], cwd=tmp_dir)
+
+            print("⬆️ Pushing to GitHub (LFS objects uploaded now)...")
+            _run_git(['git', 'push', 'origin', 'main'], cwd=tmp_dir)
+
+            print(f"✅ Backed up {record_count:,} articles to GitHub with LFS")
+
+        # Cleanup
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+        print("🧹 Cleaned up local files")
+
+        context['task_instance'].xcom_push(key='backup_record_count', value=record_count)
+        context['task_instance'].xcom_push(key='backup_file_size_mb', value=round(file_size_mb, 2))
+        return f"Backed up {record_count:,} articles ({file_size_mb:.2f} MB)"
+
+    except subprocess.CalledProcessError as e:
+        error_msg = e.output or str(e)
+        print(f"❌ Git command failed: {error_msg}")
+        raise
     except Exception as e:
-        print(f"GitHub backup failed: {e}")
-        return f"Backup failed: {e}"
+        print(f"❌ GitHub backup failed: {e}")
+        raise
 
 
 # ── Notification ───────────────────────────────────────────────────────────────
@@ -606,11 +695,16 @@ def send_production_notification(**context):
     inserted   = ti.xcom_pull(task_ids='insert_news_to_snowflake',   key='inserted_count')
     now_str    = datetime.now().strftime('%Y-%m-%d %H:%M UTC')
 
+    backup_count = ti.xcom_pull(task_ids='backup_to_github', key='backup_record_count')
+    backup_size  = ti.xcom_pull(task_ids='backup_to_github', key='backup_file_size_mb')
+
     if init_count is not None:
         msg = (
             f"✅ BTC News — Backfill batch complete\n"
             f"🕐 {now_str}\n"
-            f"📰 {init_count} Guardian articles ingested this run"
+            f"📰 {init_count} Guardian articles ingested this run\n"
+            f"📰 Finnhub: {fh_count or 0} | AlphaVantage: {av_count or 0}\n"
+            f"❄️  Snowflake: {inserted or 0} new articles merged"
         )
     else:
         msg = (
@@ -619,6 +713,9 @@ def send_production_notification(**context):
             f"📰 Guardian: {g_count or 0} | Finnhub: {fh_count or 0} | AlphaVantage: {av_count or 0}\n"
             f"❄️  Snowflake: {inserted or 0} new articles merged"
         )
+
+    if backup_count:
+        msg += f"\n📦 GitHub: {backup_count:,} total articles ({backup_size or 0} MB)"
 
     try:
         requests.post(
