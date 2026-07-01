@@ -49,7 +49,7 @@ This project provides a **complete self-hosted Airflow infrastructure** deployed
 
 | DAG | File | Schedule | Description |
 |-----|------|----------|-------------|
-| `bitcoin_news` | `bitcoin_news_dag.py` | Daily | Bitcoin news from The Guardian (historical backfill + delta), Finnhub, and AlphaVantage NEWS_SENTIMENT (multi-key rotation) |
+| `bitcoin_news` | `bitcoin_news_dag.py` | Daily 01:00 UTC | Bitcoin news from The Guardian (historical backfill + delta), Finnhub, and AlphaVantage NEWS_SENTIMENT. Exports full dataset as Parquet + TSV to GitHub via Git LFS |
 
 ### Documentation Scrapers / RAG Knowledge Bases
 
@@ -183,6 +183,7 @@ PINECONE_AWS_INDEX_NAME=your_aws_docs_index
 GITHUB_USERNAME=your_github_username
 GITHUB_TOKEN=your_github_pat
 GITHUB_REPO_BTC_HOURLY=bitcoin-technical-indicators-dataset
+GITHUB_REPO_BTC_NEWS=bitcoin-news-data
 ```
 
 ### 3. Start Airflow Locally

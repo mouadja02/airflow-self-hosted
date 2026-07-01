@@ -596,12 +596,16 @@ def backup_to_github(**context):
         print("No data to backup")
         return "No data"
 
-    csv_path = '/tmp/bitcoin-news-full.csv'
-    df.to_csv(csv_path, index=False, encoding='utf-8', chunksize=10000)
+    parquet_path = '/tmp/bitcoin-news-full.parquet'
+    tsv_path = '/tmp/bitcoin-news-full.tsv'
+    df.to_parquet(parquet_path, index=False, engine='pyarrow', compression='snappy')
+    df.to_csv(tsv_path, index=False, sep='\t', encoding='utf-8')
     del df
 
-    file_size_mb = os.path.getsize(csv_path) / (1024 * 1024)
-    print(f"💾 CSV written: {file_size_mb:.2f} MB")
+    parquet_size_mb = os.path.getsize(parquet_path) / (1024 * 1024)
+    tsv_size_mb = os.path.getsize(tsv_path) / (1024 * 1024)
+    file_size_mb = parquet_size_mb + tsv_size_mb
+    print(f"💾 Parquet written: {parquet_size_mb:.2f} MB | TSV written: {tsv_size_mb:.2f} MB")
 
     # ── 2. Clone, commit, push via Git LFS ─────────────────────────────────
     git_env = os.environ.copy()
@@ -623,19 +627,29 @@ def backup_to_github(**context):
 
             print("🔧 Initializing Git LFS...")
             _run_git(['git', 'lfs', 'install'], cwd=tmp_dir)
-            _run_git(['git', 'lfs', 'track', '*.csv'], cwd=tmp_dir)
+            _run_git(['git', 'lfs', 'track', '*.parquet'], cwd=tmp_dir)
+            _run_git(['git', 'lfs', 'track', '*.tsv'], cwd=tmp_dir)
 
             gitattributes_path = os.path.join(tmp_dir, '.gitattributes')
             if os.path.exists(gitattributes_path):
                 _run_git(['git', 'add', '.gitattributes'], cwd=tmp_dir)
 
-            csv_filename = 'bitcoin-news.csv'
-            csv_dest = os.path.join(tmp_dir, csv_filename)
+            parquet_filename = 'bitcoin-news.parquet'
+            tsv_filename = 'bitcoin-news.tsv'
+            parquet_dest = os.path.join(tmp_dir, parquet_filename)
+            tsv_dest = os.path.join(tmp_dir, tsv_filename)
 
-            print("📋 Copying CSV to repository...")
-            shutil.copy2(csv_path, csv_dest)
+            print("📋 Copying Parquet + TSV to repository...")
+            shutil.copy2(parquet_path, parquet_dest)
+            shutil.copy2(tsv_path, tsv_dest)
 
-            _run_git(['git', 'add', csv_filename], cwd=tmp_dir)
+            # Remove legacy CSV if it exists
+            legacy_csv = os.path.join(tmp_dir, 'bitcoin-news.csv')
+            if os.path.exists(legacy_csv):
+                _run_git(['git', 'rm', '-f', 'bitcoin-news.csv'], cwd=tmp_dir)
+                print("🗑️ Removed legacy bitcoin-news.csv")
+
+            _run_git(['git', 'add', parquet_filename, tsv_filename], cwd=tmp_dir)
 
             # Check for changes
             status = _run_git(['git', 'status', '--porcelain'], cwd=tmp_dir)
@@ -649,7 +663,8 @@ def backup_to_github(**context):
                 f"📅 Date: {date_str}\n"
                 f"📈 Total Articles: {record_count:,}\n"
                 f"💾 File Size: {file_size_mb:.2f} MB\n\n"
-                f"📦 Sources: Guardian, Finnhub, AlphaVantage\n\n"
+                f"📦 Sources: Guardian, Finnhub, AlphaVantage\n"
+                f"📄 Format: Apache Parquet (Snappy compression)\n\n"
                 f"Automated update via Airflow"
             )
 
@@ -662,8 +677,10 @@ def backup_to_github(**context):
             print(f"✅ Backed up {record_count:,} articles to GitHub with LFS")
 
         # Cleanup
-        if os.path.exists(csv_path):
-            os.remove(csv_path)
+        if os.path.exists(parquet_path):
+            os.remove(parquet_path)
+        if os.path.exists(tsv_path):
+            os.remove(tsv_path)
         print("🧹 Cleaned up local files")
 
         context['task_instance'].xcom_push(key='backup_record_count', value=record_count)
