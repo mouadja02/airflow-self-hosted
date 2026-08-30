@@ -108,6 +108,13 @@ except Exception as e:
 def test_connections(**context):
     """Verify both Snowflake connections are working"""
     try:
+        # Guardrail: refuse to migrate a database onto itself
+        if source_conn_id == target_conn_id:
+            raise ValueError(
+                f"❌ source_conn_id and target_conn_id are both '{source_conn_id}'. "
+                "They must be different to run the migration."
+            )
+
         # Test source connection
         logger.info("Testing source connection (snowflake_default)...")
         source_hook = SnowflakeHook(snowflake_conn_id=source_conn_id)
@@ -409,86 +416,6 @@ def create_database(database_name: str, **context):
         if conn:
             conn.close()
 
-def execute_sql_migrations(database_name: str, **context):
-    """Execute SQL migration files from snowflake directory for specified database"""
-    from pathlib import Path
-
-    try:
-        target_hook = SnowflakeHook(snowflake_conn_id=target_conn_id, role='ACCOUNTADMIN')
-        conn = target_hook.get_conn()
-        cursor = conn.cursor()
-
-        # Set database context
-        cursor.execute(f"USE DATABASE {database_name}")
-
-        # Get migration files sorted by version
-        migrations_dir = Path(__file__).parent.parent / 'snowflake' / 'migration'
-
-        # Check if migrations directory exists
-        if not migrations_dir.exists():
-            logger.warning(f"⚠️ Migrations directory not found: {migrations_dir}")
-            logger.info(f"Skipping SQL migrations for {database_name}")
-            return
-
-        sql_files = sorted(migrations_dir.glob('*.sql'))
-
-        logger.info(f"Found {len(sql_files)} migration files to execute for {database_name}")
-
-        for sql_file in sql_files:
-            logger.info(f"Executing migration: {sql_file.name}")
-
-            # Read SQL file
-            with open(sql_file, 'r') as f:
-                sql_content = f.read()
-
-            # Smart split: handle stored procedures with $$ delimiters
-            statements = []
-            current_stmt = []
-            in_procedure = False
-
-            for line in sql_content.split('\n'):
-                # Skip pure comment lines at the start of a new statement
-                if not current_stmt and line.strip().startswith('--'):
-                    continue
-
-                current_stmt.append(line)
-
-                # Check for procedure boundaries
-                if '$$' in line:
-                    in_procedure = not in_procedure
-
-                # If not in procedure and line ends with semicolon, it's a statement boundary
-                if not in_procedure and line.strip().endswith(';'):
-                    stmt = '\n'.join(current_stmt).strip()
-                    # Filter out comment-only statements
-                    if stmt and not all(l.strip().startswith('--') or not l.strip() for l in stmt.split('\n')):
-                        statements.append(stmt)
-                    current_stmt = []
-
-            # Add any remaining content
-            if current_stmt:
-                stmt = '\n'.join(current_stmt).strip()
-                if stmt and not stmt.startswith('--'):
-                    statements.append(stmt)
-
-            for i, statement in enumerate(statements):
-                try:
-                    cursor.execute(statement)
-                except Exception as stmt_error:
-                    logger.warning(f"  ⚠️ Statement {i+1} failed (may be expected): {str(stmt_error)}")
-                    # Continue with next statement even if one fails
-
-            logger.info(f"✅ Completed migration: {sql_file.name}")
-
-        cursor.close()
-        conn.close()
-
-        logger.info(f"✅ All SQL migrations executed successfully for {database_name}!")
-
-    except Exception as e:
-        logger.error(f"❌ SQL migration execution failed for {database_name}: {str(e)}")
-        raise
-
 def migration_success(**context):
     """Migration completed - cleanup resources and send Telegram notification"""
     import requests
@@ -608,8 +535,6 @@ test_connections_task = PythonOperator(
     dag=dag,
 )
 
-# Create task groups for each database
-from airflow.utils.task_group import TaskGroup
 
 database_task_groups = []
 
@@ -652,18 +577,7 @@ for database_name in databases_to_migrate:
         )
 
         # Define flow within the task group
-        # Only add execute_sql_migrations task for BITCOIN_DATA database
-        if database_name.upper() == 'BITCOIN_DATA':
-            execute_sql_migrations_task = PythonOperator(
-                task_id='execute_sql_migrations',
-                python_callable=execute_sql_migrations,
-                op_kwargs={'database_name': database_name},
-                dag=dag,
-            )
-            [get_schemas_list_task, get_table_list_task] >> init_environment_task >> create_sharing_task >> create_database_task >> execute_sql_migrations_task
-        else:
-            # For other databases, skip the SQL migrations task
-            [get_schemas_list_task, get_table_list_task] >> init_environment_task >> create_sharing_task >> create_database_task
+        [get_schemas_list_task, get_table_list_task] >> init_environment_task >> create_sharing_task >> create_database_task
 
     database_task_groups.append(db_group)
 
