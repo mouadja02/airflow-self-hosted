@@ -4,6 +4,7 @@ import requests
 import subprocess
 import tempfile
 import shutil
+import time
 from pathlib import Path
 from airflow import DAG
 from airflow.operators.python import PythonOperator
@@ -197,6 +198,53 @@ def _run_git(cmd, cwd=None, env=None, capture=True):
     return result
 
 
+def _push_commit_with_lfs(repo_dir, branch='main', max_attempts=3):
+    """Upload the new commit's LFS objects, then push its Git ref.
+
+    The clone intentionally contains only LFS pointers for existing history, so
+    ``git lfs push --all`` cannot be used without downloading every historical
+    object first. A normal ref push uploads only objects not already referenced
+    by the cloned remote, which includes the files created by this task.
+    """
+    version = _run_git(['git', 'lfs', 'version'], cwd=repo_dir)
+    print(f"🔎 {version.stdout.strip()}")
+
+    print("🔍 Validating LFS pointers in the new commit...")
+    _run_git(
+        ['git', 'lfs', 'fsck', '--pointers', 'HEAD^..HEAD'],
+        cwd=repo_dir,
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        print(
+            f"⬆️ Uploading LFS objects for HEAD "
+            f"(attempt {attempt}/{max_attempts})..."
+        )
+        _run_git(['git', 'lfs', 'push', 'origin', 'HEAD'], cwd=repo_dir)
+
+        try:
+            _run_git(
+                ['git', 'push', 'origin', f'HEAD:{branch}'],
+                cwd=repo_dir,
+            )
+            return
+        except subprocess.CalledProcessError as exc:
+            error_msg = (exc.output or str(exc)).lower()
+            is_gh009 = (
+                'gh009' in error_msg
+                or 'lfs object integrity could not be checked' in error_msg
+            )
+            if not is_gh009 or attempt == max_attempts:
+                raise
+
+            delay_seconds = 10 * attempt
+            print(
+                "⚠️ GitHub could not complete its LFS integrity check; "
+                f"retrying in {delay_seconds}s..."
+            )
+            time.sleep(delay_seconds)
+
+
 def upload_to_github_with_lfs(**context):
     """Upload large CSV files to GitHub using Git LFS.
 
@@ -238,8 +286,11 @@ def upload_to_github_with_lfs(**context):
             _run_git(['git', 'config', 'user.email', config['GITHUB_EMAIL']], cwd=tmp_dir)
 
             # Initialize Git LFS and track CSVs
-            print("🔧 Initializing Git LFS...")
-            _run_git(['git', 'lfs', 'install'], cwd=tmp_dir)
+            print("🔧 Initializing repository-local Git LFS hooks...")
+            _run_git(
+                ['git', 'lfs', 'install', '--local', '--force'],
+                cwd=tmp_dir,
+            )
 
             print("📝 Configuring LFS tracking for *.csv...")
             _run_git(['git', 'lfs', 'track', '*.csv'], cwd=tmp_dir)
@@ -317,9 +368,9 @@ Automated update via Airflow"""
             print("💾 Creating commit...")
             _run_git(['git', 'commit', '-m', commit_message], cwd=tmp_dir)
 
-            # Push (LFS objects uploaded here, only the new blobs)
-            print("⬆️ Pushing to GitHub (LFS objects uploaded now)...")
-            _run_git(['git', 'push', 'origin', 'main'], cwd=tmp_dir)
+            # Explicitly upload LFS objects before advancing the Git ref.
+            print("⬆️ Uploading LFS objects and pushing to GitHub...")
+            _push_commit_with_lfs(tmp_dir)
 
             print("✅ Successfully uploaded both files to GitHub with LFS!")
             ohlcv_url = f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}"

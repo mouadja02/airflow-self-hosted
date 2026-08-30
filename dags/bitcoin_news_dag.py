@@ -562,6 +562,53 @@ def _run_git(cmd, cwd=None, env=None, capture=True):
     return result
 
 
+def _push_commit_with_lfs(repo_dir, branch='main', max_attempts=3):
+    """Upload the new commit's LFS objects, then push its Git ref.
+
+    The clone intentionally contains only LFS pointers for existing history, so
+    ``git lfs push --all`` cannot be used without downloading every historical
+    object first. A normal ref push uploads only objects not already referenced
+    by the cloned remote, which includes the files created by this task.
+    """
+    version = _run_git(['git', 'lfs', 'version'], cwd=repo_dir)
+    print(f"🔎 {version.stdout.strip()}")
+
+    print("🔍 Validating LFS pointers in the new commit...")
+    _run_git(
+        ['git', 'lfs', 'fsck', '--pointers', 'HEAD^..HEAD'],
+        cwd=repo_dir,
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        print(
+            f"⬆️ Uploading LFS objects for HEAD "
+            f"(attempt {attempt}/{max_attempts})..."
+        )
+        _run_git(['git', 'lfs', 'push', 'origin', 'HEAD'], cwd=repo_dir)
+
+        try:
+            _run_git(
+                ['git', 'push', 'origin', f'HEAD:{branch}'],
+                cwd=repo_dir,
+            )
+            return
+        except subprocess.CalledProcessError as exc:
+            error_msg = (exc.output or str(exc)).lower()
+            is_gh009 = (
+                'gh009' in error_msg
+                or 'lfs object integrity could not be checked' in error_msg
+            )
+            if not is_gh009 or attempt == max_attempts:
+                raise
+
+            delay_seconds = 10 * attempt
+            print(
+                "⚠️ GitHub could not complete its LFS integrity check; "
+                f"retrying in {delay_seconds}s..."
+            )
+            time.sleep(delay_seconds)
+
+
 # ── GitHub backup ──────────────────────────────────────────────────────────────
 
 def backup_to_github(**context):
@@ -625,8 +672,11 @@ def backup_to_github(**context):
             _run_git(['git', 'config', 'user.name', github_username], cwd=tmp_dir)
             _run_git(['git', 'config', 'user.email', github_email], cwd=tmp_dir)
 
-            print("🔧 Initializing Git LFS...")
-            _run_git(['git', 'lfs', 'install'], cwd=tmp_dir)
+            print("🔧 Initializing repository-local Git LFS hooks...")
+            _run_git(
+                ['git', 'lfs', 'install', '--local', '--force'],
+                cwd=tmp_dir,
+            )
             _run_git(['git', 'lfs', 'track', '*.parquet'], cwd=tmp_dir)
             _run_git(['git', 'lfs', 'track', '*.tsv'], cwd=tmp_dir)
 
@@ -671,8 +721,8 @@ def backup_to_github(**context):
             print("💾 Creating commit...")
             _run_git(['git', 'commit', '-m', commit_message], cwd=tmp_dir)
 
-            print("⬆️ Pushing to GitHub (LFS objects uploaded now)...")
-            _run_git(['git', 'push', 'origin', 'main'], cwd=tmp_dir)
+            print("⬆️ Uploading LFS objects and pushing to GitHub...")
+            _push_commit_with_lfs(tmp_dir)
 
             print(f"✅ Backed up {record_count:,} articles to GitHub with LFS")
 
