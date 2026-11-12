@@ -60,6 +60,7 @@ Thumbs.db
 *.tmp
 .cache/
 .pytest_cache/
+infra/aws/deployment-state.json
 
 # Secrets and credentials (extra safety)
 *secret*

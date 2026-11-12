@@ -145,6 +145,7 @@ jobs:
       - name: Verify Task Logging
         run: |
           docker compose run --rm --no-deps --entrypoint python \
+            -e PYTHONPATH=/opt/airflow/dags:/opt/airflow/custom_config \
             --volume "$PWD:/opt/airflow/verification:ro" airflow-scheduler \
             -m unittest discover -s /opt/airflow/verification/tests -v
 
@@ -309,6 +310,11 @@ jobs:
           git pull origin main
 
           echo "🔐 Moving new .env file into place..."
+          # Preserve the key needed to decrypt the runtime AWS connection.
+          if [ -f .env ]; then
+            sed -n '/^AIRFLOW_FERNET_KEY=/p; /^BITCOIN_WORKER_STATE_MACHINE_ARN=/p' .env >> /tmp/.env
+          fi
+          chmod 600 /tmp/.env
           mv /tmp/.env .
 
           echo "🐳 Rebuilding and restarting containers..."

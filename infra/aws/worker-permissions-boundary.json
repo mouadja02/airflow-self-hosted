@@ -1,0 +1,102 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProjectRepositoryAccess",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:BatchGetImage",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeImages",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:InitiateLayerUpload",
+        "ecr:PutImage",
+        "ecr:UploadLayerPart"
+      ],
+      "Resource": "arn:aws:ecr:eu-west-3:434740914108:repository/airflow-bitcoin-*"
+    },
+    {
+      "Sid": "EcrRegistryAuthentication",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ProjectBuildSource",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:GetBucketVersioning"
+      ],
+      "Resource": "arn:aws:s3:::airflow-bitcoin-*",
+      "Condition": {
+        "StringEquals": {
+          "s3:ResourceAccount": "434740914108"
+        }
+      }
+    },
+    {
+      "Sid": "ProjectBuildObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::airflow-bitcoin-*/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:ResourceAccount": "434740914108"
+        }
+      }
+    },
+    {
+      "Sid": "ProjectLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": [
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/lambda/airflow-bitcoin-*",
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/codebuild/airflow-bitcoin-*",
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/vendedlogs/states/airflow-bitcoin-*"
+      ]
+    },
+    {
+      "Sid": "ProjectSecretsRead",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:eu-west-3:434740914108:secret:airflow-bitcoin-*"
+    },
+    {
+      "Sid": "ProjectWorkerInvocation",
+      "Effect": "Allow",
+      "Action": "lambda:InvokeFunction",
+      "Resource": "arn:aws:lambda:eu-west-3:434740914108:function:airflow-bitcoin-*"
+    },
+    {
+      "Sid": "ProjectStateMachineStart",
+      "Effect": "Allow",
+      "Action": [
+        "states:StartExecution",
+        "states:DescribeStateMachine"
+      ],
+      "Resource": "arn:aws:states:eu-west-3:434740914108:stateMachine:airflow-bitcoin-*"
+    },
+    {
+      "Sid": "ProjectExecutionStatus",
+      "Effect": "Allow",
+      "Action": [
+        "states:DescribeExecution",
+        "states:GetExecutionHistory",
+        "states:StopExecution"
+      ],
+      "Resource": "arn:aws:states:eu-west-3:434740914108:execution:airflow-bitcoin-*:*"
+    }
+  ]
+}

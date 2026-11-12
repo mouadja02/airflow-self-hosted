@@ -1,0 +1,243 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ProjectStacks",
+      "Effect": "Allow",
+      "Action": "cloudformation:*",
+      "Resource": "arn:aws:cloudformation:eu-west-3:434740914108:stack/airflow-bitcoin-*/*"
+    },
+    {
+      "Sid": "TemplateValidation",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ValidateTemplate",
+        "cloudformation:GetTemplateSummary"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ProjectFunctions",
+      "Effect": "Allow",
+      "Action": "lambda:*",
+      "Resource": "arn:aws:lambda:eu-west-3:434740914108:function:airflow-bitcoin-*"
+    },
+    {
+      "Sid": "ProjectRepositories",
+      "Effect": "Allow",
+      "Action": "ecr:*",
+      "Resource": "arn:aws:ecr:eu-west-3:434740914108:repository/airflow-bitcoin-*"
+    },
+    {
+      "Sid": "ProjectBuilders",
+      "Effect": "Allow",
+      "Action": "codebuild:*",
+      "Resource": [
+        "arn:aws:codebuild:eu-west-3:434740914108:project/airflow-bitcoin-*",
+        "arn:aws:codebuild:eu-west-3:434740914108:build/airflow-bitcoin-*:*"
+      ]
+    },
+    {
+      "Sid": "ProjectSecretManagement",
+      "Effect": "Allow",
+      "Action": "secretsmanager:*",
+      "Resource": "arn:aws:secretsmanager:eu-west-3:434740914108:secret:airflow-bitcoin-*"
+    },
+    {
+      "Sid": "CreateBoundedProjectRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateRole",
+      "Resource": "arn:aws:iam::434740914108:role/airflow-bitcoin-*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::434740914108:policy/AirflowBitcoinWorkerBoundary"
+        }
+      }
+    },
+    {
+      "Sid": "ProjectRoleLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:DeleteRolePolicy",
+        "iam:DeleteRole",
+        "iam:TagRole",
+        "iam:UntagRole"
+      ],
+      "Resource": "arn:aws:iam::434740914108:role/airflow-bitcoin-*"
+    },
+    {
+      "Sid": "PassProjectServiceRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::434740914108:role/airflow-bitcoin-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "lambda.amazonaws.com",
+            "codebuild.amazonaws.com",
+            "states.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ReadWorkerBoundary",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion"
+      ],
+      "Resource": "arn:aws:iam::434740914108:policy/AirflowBitcoinWorkerBoundary"
+    },
+    {
+      "Sid": "CreateBoundedRuntimeUser",
+      "Effect": "Allow",
+      "Action": "iam:CreateUser",
+      "Resource": "arn:aws:iam::434740914108:user/airflow-bitcoin-runtime",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::434740914108:policy/AirflowBitcoinWorkerBoundary"
+        }
+      }
+    },
+    {
+      "Sid": "RuntimeUserLifecycle",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetUser",
+        "iam:DeleteUser",
+        "iam:PutUserPolicy",
+        "iam:GetUserPolicy",
+        "iam:ListUserPolicies",
+        "iam:DeleteUserPolicy",
+        "iam:TagUser",
+        "iam:UntagUser",
+        "iam:CreateAccessKey",
+        "iam:ListAccessKeys",
+        "iam:DeleteAccessKey"
+      ],
+      "Resource": "arn:aws:iam::434740914108:user/airflow-bitcoin-runtime"
+    },
+    {
+      "Sid": "CreateRegionalBuildBuckets",
+      "Effect": "Allow",
+      "Action": "s3:CreateBucket",
+      "Resource": "arn:aws:s3:::airflow-bitcoin-*",
+      "Condition": {
+        "StringEquals": {
+          "s3:LocationConstraint": "eu-west-3"
+        }
+      }
+    },
+    {
+      "Sid": "ProjectBuildBucketConfiguration",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteBucket",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning",
+        "s3:GetLifecycleConfiguration",
+        "s3:PutLifecycleConfiguration",
+        "s3:GetBucketTagging",
+        "s3:PutBucketTagging",
+        "s3:GetBucketPolicy",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy"
+      ],
+      "Resource": "arn:aws:s3:::airflow-bitcoin-*",
+      "Condition": {
+        "StringEquals": {
+          "s3:ResourceAccount": "434740914108"
+        }
+      }
+    },
+    {
+      "Sid": "ProjectStateMachineManagement",
+      "Effect": "Allow",
+      "Action": "states:*",
+      "Resource": [
+        "arn:aws:states:eu-west-3:434740914108:stateMachine:airflow-bitcoin-*",
+        "arn:aws:states:eu-west-3:434740914108:execution:airflow-bitcoin-*:*"
+      ]
+    },
+    {
+      "Sid": "ProjectLogRetention",
+      "Effect": "Allow",
+      "Action": [
+        "logs:PutRetentionPolicy",
+        "logs:DeleteLogGroup",
+        "logs:DeleteLogStream",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/lambda/airflow-bitcoin-*",
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/codebuild/airflow-bitcoin-*",
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/vendedlogs/states/airflow-bitcoin-*"
+      ]
+    },
+    {
+      "Sid": "EcrRegistryAuthentication",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ProjectBuildSource",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:GetBucketVersioning"
+      ],
+      "Resource": "arn:aws:s3:::airflow-bitcoin-*",
+      "Condition": {
+        "StringEquals": {
+          "s3:ResourceAccount": "434740914108"
+        }
+      }
+    },
+    {
+      "Sid": "ProjectBuildObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::airflow-bitcoin-*/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:ResourceAccount": "434740914108"
+        }
+      }
+    },
+    {
+      "Sid": "ProjectLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": [
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/lambda/airflow-bitcoin-*",
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/codebuild/airflow-bitcoin-*",
+        "arn:aws:logs:eu-west-3:434740914108:log-group:/aws/vendedlogs/states/airflow-bitcoin-*"
+      ]
+    }
+  ]
+}

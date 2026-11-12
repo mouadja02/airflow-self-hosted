@@ -1,0 +1,7 @@
+boto3==1.39.11
+snowflake-connector-python[pandas]==3.6.0
+pandas==2.1.4
+numpy==1.26.4
+pyarrow==16.1.0
+TA-lib==0.7.1
+requests==2.32.5

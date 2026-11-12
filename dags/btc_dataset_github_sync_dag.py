@@ -10,6 +10,8 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from airflow.exceptions import AirflowException
+from bitcoin_pipeline_helpers import INDICATORS_ASSET, closed_hour_cutoff, validate_indicator_alignment
+from bitcoin_cloud import BitcoinCloudOperator, cloud_enabled, finish_cloud_publication
 
 # Default arguments
 default_args = {
@@ -27,7 +29,7 @@ dag = DAG(
     'btc_technical_indicators_dataset',
     default_args=default_args,
     description='Daily refresh of Bitcoin OHLCV with 90+ Technical Indicators to GitHub',
-    schedule='30 0 * * *',  # Daily at 00:30 UTC
+    schedule=[INDICATORS_ASSET],  # Publish only after the indicator update succeeds.
     catchup=False,
     max_active_runs=1,
     tags=['bitcoin', 'technical-indicators', 'dataset', 'github'],
@@ -38,7 +40,7 @@ def get_config(**context):
     config = {
         'GITHUB_USERNAME': os.getenv('GITHUB_USERNAME', 'mouadja02'),
         'GITHUB_REPO': os.getenv('GITHUB_REPO_BTC_HOURLY', 'bitcoin-technical-indicators-dataset'),
-        'GITHUB_TOKEN': os.getenv('GITHUB_TOKEN'),
+        'GITHUB_TOKEN': None if cloud_enabled() else os.getenv('GITHUB_TOKEN'),
         'GITHUB_EMAIL': 'mouadpro02@gmail.com',
         'SNOWFLAKE_DATABASE': os.getenv('SNOWFLAKE_DATABASE', 'BITCOIN_DATA'),
         'SNOWFLAKE_SCHEMA': 'DATA',
@@ -52,7 +54,7 @@ def get_config(**context):
     }
 
     # Validate required configs
-    if not config['GITHUB_TOKEN']:
+    if not config['GITHUB_TOKEN'] and not cloud_enabled():
         raise AirflowException("GITHUB_TOKEN is required but not set")
 
     print("✅ Configuration loaded successfully")
@@ -64,6 +66,8 @@ def export_data_from_snowflake(**context):
     try:
         config = context['task_instance'].xcom_pull(task_ids='get_config')
         hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+        cutoff = closed_hour_cutoff()
+        through_timestamp = validate_indicator_alignment(hook, cutoff)
 
         # ========== EXPORT 1: OHLCV ONLY (Raw Data) ==========
         print("📊 Step 1a: Exporting raw OHLCV data...")
@@ -74,11 +78,14 @@ def export_data_from_snowflake(**context):
             TO_TIMESTAMP_NTZ(UNIX_TIMESTAMP) AS DATETIME,
             OPEN, HIGH, CLOSE, LOW, VOLUME_USD, VOLUME_BTC
         FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_OHLCV_TABLE']}
+        WHERE UNIX_TIMESTAMP <= {through_timestamp}
         ORDER BY UNIX_TIMESTAMP ASC;
         """
 
         df_ohlcv = hook.get_pandas_df(ohlcv_query)
         ohlcv_record_count = len(df_ohlcv)
+        if df_ohlcv.empty or int(df_ohlcv['UNIX_TIMESTAMP'].max()) != through_timestamp:
+            raise AirflowException("OHLCV export does not reach the verified data watermark")
         print(f"✅ Fetched {ohlcv_record_count:,} OHLCV rows")
 
         print(f"💾 Writing OHLCV CSV file to {config['LOCAL_FILE_PATH_OHLCV_ONLY']}...")
@@ -97,7 +104,7 @@ def export_data_from_snowflake(**context):
         # ========== EXPORT 2: OHLCV + Technical Indicators ==========
         print("\n📊 Step 1b: Counting total records with technical indicators...")
 
-        count_sql = f"SELECT COUNT(*) FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_TABLE']};"
+        count_sql = f"SELECT COUNT(*) FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_TABLE']} WHERE UNIX_TIMESTAMP <= {through_timestamp};"
         result = hook.get_first(count_sql)
         total_records = result[0] if result else 0
         print(f"📈 Total records to export: {total_records:,}")
@@ -146,11 +153,14 @@ def export_data_from_snowflake(**context):
             PRICE_CHANGE, HIGH_LOW_RATIO, CLOSE_OPEN_RATIO,
             VOLATILITY_30D, PRICE_VOLATILITY_30D
         FROM {config['SNOWFLAKE_DATABASE']}.{config['SNOWFLAKE_SCHEMA']}.{config['SNOWFLAKE_TABLE']}
+        WHERE UNIX_TIMESTAMP <= {through_timestamp}
         ORDER BY UNIX_TIMESTAMP ASC;
         """
 
         df_indicators = hook.get_pandas_df(query)
         indicators_record_count = len(df_indicators)
+        if df_indicators.empty or int(df_indicators['UNIX_TIMESTAMP'].max()) != through_timestamp:
+            raise AirflowException("Indicator export does not reach the verified data watermark")
         print(f"✅ Fetched {indicators_record_count:,} rows with indicators")
 
         print(f"💾 Writing Technical Indicators CSV file to {config['LOCAL_FILE_PATH_WITH_INDICATORS']}...")
@@ -175,7 +185,8 @@ def export_data_from_snowflake(**context):
             'indicators_file_path': config['LOCAL_FILE_PATH_WITH_INDICATORS'],
             'ohlcv_file_size_mb': ohlcv_file_size_mb,
             'indicators_file_size_mb': indicators_file_size_mb,
-            'success': True
+            'success': True,
+            'through_timestamp': through_timestamp,
         }
 
     except Exception as e:
@@ -355,6 +366,7 @@ def upload_to_github_with_lfs(**context):
 
 📅 Date: {date_str}
 📈 Records: {export_info['record_count']:,}
+🕒 Data through: {datetime.utcfromtimestamp(export_info['through_timestamp']).isoformat()} UTC
 
 📦 Files Updated:
   • bitcoin-hourly-ohlcv.csv ({export_info['ohlcv_file_size_mb']:.2f} MB)
@@ -371,6 +383,8 @@ Automated update via Airflow"""
             # Explicitly upload LFS objects before advancing the Git ref.
             print("⬆️ Uploading LFS objects and pushing to GitHub...")
             _push_commit_with_lfs(tmp_dir)
+            commit_sha = _run_git(['git', 'rev-parse', 'HEAD'], cwd=tmp_dir).stdout.strip()
+            print(f"Published dataset commit: {commit_sha}")
 
             print("✅ Successfully uploaded both files to GitHub with LFS!")
             ohlcv_url = f"https://github.com/{config['GITHUB_USERNAME']}/{config['GITHUB_REPO']}/blob/main/{ohlcv_filename}"
@@ -390,6 +404,8 @@ Automated update via Airflow"""
             'ohlcv_url': ohlcv_url,
             'indicators_url': indicators_url,
             'skipped': False,
+            'commit_sha': commit_sha,
+            'through_timestamp': export_info['through_timestamp'],
         }
 
     except subprocess.CalledProcessError as e:
@@ -407,6 +423,7 @@ def send_telegram_notification(**context):
         config = context['task_instance'].xcom_pull(task_ids='get_config')
         export_info = context['task_instance'].xcom_pull(task_ids='export_data')
         upload_info = context['task_instance'].xcom_pull(task_ids='upload_to_github')
+        export_info = upload_info.get('export_info', export_info)
 
         if not config['TELEGRAM_BOT_TOKEN']:
             print("⚠️ TELEGRAM_BOT_TOKEN not found, skipping notification")
@@ -471,17 +488,15 @@ get_config_task = PythonOperator(
     dag=dag,
 )
 
-export_data_task = PythonOperator(
-    task_id='export_data',
-    python_callable=export_data_from_snowflake,
-    dag=dag,
-)
-
-upload_github_task = PythonOperator(
-    task_id='upload_to_github',
-    python_callable=upload_to_github_with_lfs,
-    dag=dag,
-)
+if cloud_enabled():
+    export_data_task = BitcoinCloudOperator(task_id='export_data', action='publish', dag=dag)
+    upload_github_task = PythonOperator(
+        task_id='upload_to_github', python_callable=finish_cloud_publication, dag=dag)
+else:
+    export_data_task = PythonOperator(
+        task_id='export_data', python_callable=export_data_from_snowflake, dag=dag)
+    upload_github_task = PythonOperator(
+        task_id='upload_to_github', python_callable=upload_to_github_with_lfs, dag=dag)
 
 telegram_notification_task = PythonOperator(
     task_id='send_telegram_notification',

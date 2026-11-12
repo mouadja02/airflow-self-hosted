@@ -5,7 +5,7 @@ Includes database initialization with schema/table creation and historical OHLCV
 Binance klines API limit: 1000 records per call. No API key required.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import json
 import requests
@@ -16,6 +16,7 @@ from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.providers.snowflake.operators.snowflake import SnowflakeOperator
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from airflow.operators.empty import EmptyOperator
+from bitcoin_pipeline_helpers import PRICE_ASSET, HOUR, closed_hour_cutoff, fetch_hourly_klines
 
 # Default arguments
 default_args = {
@@ -35,6 +36,7 @@ dag = DAG(
     description='Fetch Bitcoin hourly price data and store in Snowflake',
     schedule='5 0 * * *',  # Every day after midnight UTC
     catchup=False,
+    max_active_runs=1,
     tags=['bitcoin', 'cryptocurrency', 'snowflake'],
 )
 
@@ -285,28 +287,44 @@ def process_all_historical_batches(**context):
 # ─── Daily Delta Update ────────────────────────────────────────────────
 
 def fetch_btc_data(**context):
-    """Fetch Bitcoin hourly data from Binance public API (delta update)"""
+    """Catch up from Snowflake's watermark, with an optional historical repair."""
+    hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+    latest = hook.get_first("SELECT MAX(UNIX_TIMESTAMP) FROM BITCOIN_DATA.DATA.BTC_HOURLY_DATA")
+    cutoff = closed_hour_cutoff()
+    # Re-fetch the last stored hour to finalize any previously partial candle.
+    start = int(latest[0]) if latest and latest[0] is not None else BTC_START_TIMESTAMP
+    conf = getattr(context.get('dag_run'), 'conf', None) or {}
+    if 'repair_from_timestamp' in conf:
+        repair = conf['repair_from_timestamp']
+        if isinstance(repair, bool) or not isinstance(repair, int) or repair < BTC_START_TIMESTAMP or repair % HOUR:
+            raise ValueError("repair_from_timestamp must be an hourly UTC epoch since Binance listing")
+        start = min(start, repair)
+    start = min(start, cutoff - HOUR)
+    data = fetch_hourly_klines(start, cutoff)
+    ti = context['task_instance']
+    ti.xcom_push(key='btc_raw_data', value=data)
+    ti.xcom_push(key='fetch_range', value={'start_timestamp': start, 'through_timestamp': cutoff - HOUR})
+    print(f"Fetched {len(data)} closed hourly candles from {start} through {cutoff - HOUR}")
+    return len(data)
 
-    url = "https://api.binance.com/api/v3/klines"
-    params = {
-        'symbol': 'BTCUSDT',
-        'interval': '1h',
-        'limit': 100,  # Last 100 hours
-    }
 
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        if isinstance(data, list):
-            context['task_instance'].xcom_push(key='btc_raw_data', value=data)
-            return data
-        else:
-            raise Exception(f"API returned error: {data.get('msg', 'Unknown error')}")
-
-    except Exception as e:
-        raise Exception(f"Failed to fetch BTC data: {str(e)}")
+def validate_price_data(**context):
+    """Publish a price update only after the fetched range is complete in Snowflake."""
+    ti = context['task_instance']
+    change = ti.xcom_pull(task_ids='fetch_btc_data', key='fetch_range')
+    if not change:
+        cutoff = closed_hour_cutoff()
+        change = {'start_timestamp': cutoff - 24 * HOUR, 'through_timestamp': cutoff - HOUR}
+    start, end = int(change['start_timestamp']), int(change['through_timestamp'])
+    hook = SnowflakeHook(snowflake_conn_id='snowflake_default')
+    result = hook.get_first(f"""SELECT COUNT(*), COUNT(DISTINCT UNIX_TIMESTAMP), MAX(UNIX_TIMESTAMP)
+        FROM BITCOIN_DATA.DATA.BTC_HOURLY_DATA WHERE UNIX_TIMESTAMP BETWEEN {start} AND {end}""")
+    expected = (end - start) // HOUR + 1
+    if not result or result[0] != expected or result[1] != expected or result[2] != end:
+        raise ValueError(f"Hourly price range is incomplete: expected {expected} rows through {end}, got {result}")
+    context['outlet_events'][PRICE_ASSET].extra = change
+    print(f"Verified {expected} consecutive price candles through {end}")
+    return change
 
 def transform_btc_data(**context):
     """Transform Bitcoin data from Binance klines format for Snowflake insertion"""
@@ -323,7 +341,7 @@ def transform_btc_data(**context):
     bulk_values = []
     for record in response_data:
         unix_timestamp = record[0] // 1000  # ms → s
-        date_obj = datetime.fromtimestamp(unix_timestamp)
+        date_obj = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc)
         date = date_obj.strftime('%Y-%m-%d')
         hour = date_obj.hour
 
@@ -447,6 +465,13 @@ join_task = EmptyOperator(
     dag=dag,
 )
 
+validate_data_task = PythonOperator(
+    task_id='validate_price_data',
+    python_callable=validate_price_data,
+    outlets=[PRICE_ASSET],
+    dag=dag,
+)
+
 # Notification
 telegram_notification_task = PythonOperator(
     task_id='send_telegram_notification',
@@ -475,4 +500,4 @@ fetch_data_task >> transform_data_task >> execute_merge_task
 [process_batches_task, execute_merge_task] >> join_task
 
 # Final notification
-join_task >> telegram_notification_task
+join_task >> validate_data_task >> telegram_notification_task

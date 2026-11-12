@@ -6,7 +6,7 @@ x-airflow-common: &airflow-common
   environment: &airflow-common-env
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
@@ -48,6 +48,7 @@ x-airflow-common: &airflow-common
     ALPHAVANTAGE_API_KEYS: ${ALPHAVANTAGE_API_KEYS}
     CRYPTOCOMPARE_API_KEY: ${CRYPTOCOMPARE_API_KEY}
     FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY}
+    BITCOIN_WORKER_STATE_MACHINE_ARN: ${BITCOIN_WORKER_STATE_MACHINE_ARN:-}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./plugins:/opt/airflow/plugins
@@ -143,6 +144,8 @@ services:
           memory: 768M
     depends_on:
       <<: *airflow-common-depends-on
+      airflow-apiserver:
+        condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
 
@@ -165,6 +168,8 @@ services:
           memory: 256M
     depends_on:
       <<: *airflow-common-depends-on
+      airflow-apiserver:
+        condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
 

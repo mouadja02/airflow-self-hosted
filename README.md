@@ -11,7 +11,7 @@ This project provides a **complete self-hosted Airflow infrastructure** deployed
 - **Cost-Effective**: Run on Raspberry Pi (~$100) instead of cloud services ($100+/month)
 - **Full Control**: Complete control over your data pipeline infrastructure
 - **Privacy**: Keep your data and workflows on your own hardware
-- **Always On**: 24/7 pipeline execution without cloud bills
+- **Always On**: 24/7 local scheduling with AWS workers for Bitcoin calculations and publication
 
 ### Key Features
 
@@ -32,9 +32,9 @@ This project provides a **complete self-hosted Airflow infrastructure** deployed
 | DAG | File | Schedule | Description |
 |-----|------|----------|-------------|
 | `btc_updater_batch1–4` | `dataset_updater.py` | 06:45–10:00 UTC | 32 on-chain metrics (MVRV, NUPL, SOPR, hashrate, ETF flows, etc.) fetched from bitcoin-data.com and merged into Snowflake `BITCOIN_DATA.DATA` |
-| `bitcoin_ohlcv_dataset` | `bitcoin_ohlcv_dataset.py` | Daily 00:05 UTC | Bitcoin hourly OHLCV from Binance API with historical backfill to 2010 |
-| `btc_technical_indicators_dataset` | `btc_dataset_github_sync_dag.py` | Daily 00:30 UTC | Refreshes Bitcoin OHLCV + 90+ technical indicators and publishes to GitHub dataset repo |
-| `technical_indicators` | `technical_indicators_dag.py` | Daily | Calculates 110+ TA-Lib technical indicators on OHLCV data in Snowflake |
+| `btc_price_dataset` | `bitcoin_ohlcv_dataset.py` | Daily 00:05 UTC | Bitcoin hourly OHLCV from Binance API with paginated outage recovery |
+| `btc_technical_indicators_dataset` | `btc_dataset_github_sync_dag.py` | After validated indicator updates | Publishes matching, complete OHLCV and technical-indicator snapshots to GitHub |
+| `technical_indicators_update` | `technical_indicators_dag.py` | After validated OHLCV updates | Calculates 110+ TA-Lib indicators, including recalculation after historical repairs |
 | `bitcoin_on_chain_trader` | `on_chain_trader_dag.py` | Daily 23:05 UTC | Computes on-chain trading signals (yfinance + web scraping) for algorithmic strategy |
 
 ### Market & Derivatives Data
@@ -325,6 +325,32 @@ find docker/data/airflow/logs -mtime +30 -delete
 ---
 
 ## Troubleshooting
+
+**Bitcoin CSV is stale after a successful DAG run:**
+
+The Bitcoin pipeline uses successful asset updates to enforce this order:
+`btc_price_dataset` → `technical_indicators_update` → `btc_technical_indicators_dataset`.
+The price DAG keeps its daily 00:05 UTC schedule. Downstream DAGs run only after
+the upstream data has been merged and validated, including after manual reruns.
+
+Ingestion resumes at the stored timestamp and paginates Binance requests until
+all closed hourly candles are fetched. It does not stop at 100 or 1,000 hours.
+The current trading candle is excluded. Indicator calculation includes the whole
+changed range plus 1,000 hours of warmup; repaired historical gaps also cause
+subsequent existing indicator rows to be recalculated. Publication checks matching
+watermarks and missing indicator rows before uploading either CSV.
+
+To repair an older gap behind the current watermark, trigger only the price DAG
+with an hourly UTC epoch; successful validation automatically triggers both
+downstream DAGs:
+
+```bash
+docker compose exec airflow-apiserver airflow dags trigger \
+  --conf '{"repair_from_timestamp":1794009600}' btc_price_dataset
+```
+
+For offloading calculations and Git LFS uploads from the Pi, see
+[the deployed AWS workers and recovery instructions](docs/bitcoin-cloud-worker.md).
 
 **Task logs show `http://:8793/...: No host supplied`:**
 
