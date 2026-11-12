@@ -51,7 +51,7 @@ jobs:
         id: filter
         run: |
           # Infrastructure files that require rebuild
-          INFRA_FILES="docker-compose.yml Dockerfile airflow.cfg requirements.txt"
+          INFRA_FILES="docker-compose.yml Dockerfile config/airflow.cfg config/airflow_local_settings.py scripts/check_file_descriptors.py scripts/patch_airflow_logging.py requirements.txt"
           
           # Get changed files
           CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
@@ -117,7 +117,7 @@ jobs:
       - name: Build and Start Containers
         run: |
           echo "🔨 Building Docker containers..."
-          docker compose up -d --build --quiet-pull 2>&1 | grep -v "Pulling\|Download\|Extracting\|Waiting" || true
+          docker compose up -d --build --quiet-pull
           echo "✅ Containers started"
 
       - name: Wait for Healthchecks
@@ -141,6 +141,12 @@ jobs:
           docker compose ps
           docker compose logs --tail=50
           exit 1
+
+      - name: Verify Task Logging
+        run: |
+          docker compose run --rm --no-deps --entrypoint python \
+            --volume "$PWD:/opt/airflow/verification:ro" airflow-scheduler \
+            -m unittest discover -s /opt/airflow/verification/tests -v
 
       - name: Stop Containers
         if: always()
@@ -306,9 +312,7 @@ jobs:
           mv /tmp/.env .
 
           echo "🐳 Rebuilding and restarting containers..."
-          docker compose up -d --build --force-recreate --remove-orphans 2>&1 | \
-            grep -vE "Pulling|Download|Extracting|Waiting|Pull complete|Already exists|sha256" | \
-            grep -E "ERROR|WARNING|Building|Built|Created|Started|^$" || true
+          docker compose up -d --build --force-recreate --remove-orphans
 
           echo "🧹 Cleaning up..."
           docker image prune -f > /dev/null 2>&1

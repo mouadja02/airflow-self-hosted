@@ -326,6 +326,44 @@ find docker/data/airflow/logs -mtime +30 -delete
 
 ## Troubleshooting
 
+**Task logs show `http://:8793/...: No host supplied`:**
+
+A task that fails before its worker starts has no hostname or worker log. Inspect
+the scheduler first:
+
+```bash
+docker compose logs --since 24h airflow-scheduler
+docker compose exec airflow-scheduler python /opt/airflow/scripts/check_file_descriptors.py
+```
+
+The image pins Airflow 3.0.6, which includes the task supervisor and DAG processor
+file-descriptor cleanup fixes missing from 3.0.1. Direct application dependencies
+are pinned so a rebuild does not unexpectedly upgrade them. Containers have a
+65,536 open-file limit, and scheduler/processor health
+checks detect processes using 80% of that limit. Docker marks a failing check as
+unhealthy; this alone does not restart the container.
+
+The image also applies a version-checked SDK patch that closes task logs when
+logging setup, worker startup, secrets loading, or task supervision raises an
+exception. Regression tests exercise successful and failed supervision so an
+upgrade cannot silently restore the descriptor leak. Shared log reads also close
+their files explicitly.
+
+Task logs stay on the shared `docker/data/airflow/logs` volume. The custom task
+log reader explains tasks that never started, were skipped, or failed upstream
+without making a request to a hostless URL. DAG processor output goes to Docker
+stdout; Docker logs rotate at 10 MB with five files retained per container.
+
+Historical file-limit failures can be recovered from a saved scheduler log into
+missing or empty task log files. The recovered entries explicitly identify their
+source. Existing nonempty logs and task states are preserved:
+
+```bash
+docker compose logs --no-color --since 7d airflow-scheduler > /tmp/scheduler.log
+python3 scripts/recover_executor_logs.py /tmp/scheduler.log --log-dir docker/data/airflow/logs
+# After inspecting the preview, add --write to recover the diagnostics.
+```
+
 **DAG not appearing in UI:**
 ```bash
 docker compose exec airflow-webserver airflow dags list-import-errors

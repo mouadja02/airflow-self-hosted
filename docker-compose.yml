@@ -10,11 +10,15 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    AIRFLOW__CORE__HOSTNAME_CALLABLE: socket.gethostname
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
+    PYTHONPATH: '/opt/airflow/custom_config'
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: 240
     AIRFLOW__CORE__DAG_FILE_PROCESSOR_TIMEOUT: 360
     AIRFLOW__LOGGING__REMOTE_LOGGING: False
+    AIRFLOW__LOGGING__LOGGING_CONFIG_CLASS: airflow_local_settings.LOGGING_CONFIG
+    AIRFLOW__LOGGING__DAG_PROCESSOR_LOG_TARGET: stdout
     # Pi Optimizations
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__PARALLELISM: 8
@@ -50,6 +54,16 @@ x-airflow-common: &airflow-common
     - ./snowflake:/opt/airflow/snowflake
     - ./docker/data/airflow/logs:/opt/airflow/logs
     - ./docker/data/airflow/config:/opt/airflow/config
+  # Headroom for worker sockets/logs; the Airflow upgrade fixes the underlying leak.
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  logging:
+    driver: json-file
+    options:
+      max-size: '10m'
+      max-file: '5'
   user: "${AIRFLOW_UID:-1000}:0"
   networks:
     - airflow_network
@@ -114,7 +128,7 @@ services:
     command: scheduler
     hostname: airflow-scheduler
     healthcheck:
-      test: [ "CMD", "curl", "--fail", "http://0.0.0.0:8974/health" ]
+      test: [ "CMD-SHELL", "curl --fail --silent http://0.0.0.0:8974/health && python /opt/airflow/scripts/check_file_descriptors.py" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -158,7 +172,7 @@ services:
     <<: *airflow-common
     command: dag-processor
     healthcheck:
-      test: [ "CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"' ]
+      test: [ "CMD-SHELL", 'python /opt/airflow/scripts/check_file_descriptors.py && airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"' ]
       interval: 60s
       timeout: 30s
       retries: 5

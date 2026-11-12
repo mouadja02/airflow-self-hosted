@@ -1,4 +1,6 @@
-FROM apache/airflow:3.0.1
+ARG AIRFLOW_VERSION=3.0.6
+FROM apache/airflow:${AIRFLOW_VERSION}
+ARG AIRFLOW_VERSION
 
 # Switch to root user to install packages
 USER root
@@ -28,4 +30,12 @@ USER airflow
 
 # Install Python packages
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir --quiet -r /tmp/requirements.txt
+# Keep dependency resolution from silently replacing the selected Airflow version.
+RUN pip install --no-cache-dir --quiet "apache-airflow==${AIRFLOW_VERSION}" -r /tmp/requirements.txt \
+    && pip check
+
+# Keep operational changes independent of the dependency installation layer.
+COPY scripts/check_file_descriptors.py /opt/airflow/scripts/check_file_descriptors.py
+COPY scripts/patch_airflow_logging.py /opt/airflow/scripts/patch_airflow_logging.py
+COPY config/airflow_local_settings.py /opt/airflow/custom_config/airflow_local_settings.py
+RUN python /opt/airflow/scripts/patch_airflow_logging.py
